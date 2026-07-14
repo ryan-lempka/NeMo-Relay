@@ -57,6 +57,7 @@ The following table describes OpenTelemetry exporter settings:
 | `enabled` | `false` | Must be `true` to construct and register the subscriber. |
 | `mark_projection` | `inherit` | `inherit` uses exporter-native handling; `event` forces span events; `tool` emits zero-duration spans, parented as children when context is available, for trace-tree visibility. |
 | `mark_exclude_names` | `["llm.chunk"]` | Mark names excluded from `tool` projection; excluded marks retain exporter-native handling. Metadata `hook_event_name` aliases are also matched. |
+| `attribute_mappings` | `[]` | Ordered `{ key, alias }` copies of fully qualified projected attributes; representable source values keep their OTLP type. |
 | `transport` | `http_binary` | `http_binary` or `grpc`. |
 | `endpoint` | Exporter default | OTLP endpoint. |
 | `headers` | `{}` | String-to-string exporter headers. |
@@ -93,6 +94,22 @@ attributes. These values match ATIF `step.extra.ancestry.function_id` and
 `step.extra.ancestry.parent_id` for the same events. For plugin-managed ATIF,
 the trajectory-root span's `nemo_relay.uuid` also matches the ATIF `session_id`.
 Backend-native `trace_id` and `span_id` values are not written into ATIF.
+
+Top-level `data` and `metadata` fields are emitted as typed dotted attributes.
+For example, `metadata = { tenant = "acme" }` becomes
+`nemo_relay.start.metadata.tenant = "acme"`. Nested objects and arrays remain
+JSON strings at their top-level attribute. Mark category-profile fields flatten
+under `nemo_relay.mark.category_profile`. Handle and mark attributes are also
+projected under `nemo_relay.handle_attributes` and `nemo_relay.mark.attributes`.
+Input and output fields flatten under `nemo_relay.start.input` and
+`nemo_relay.end.output`. Configure an alias when a backend expects a different
+attribute name:
+
+```toml
+attribute_mappings = [
+  { key = "nemo_relay.start.metadata.tenant", alias = "tenant.id" },
+]
+```
 
 For LLM end spans, cost is emitted as `nemo_relay.llm.cost.total` and
 `nemo_relay.llm.cost.currency` (any currency). Token counts are not emitted as

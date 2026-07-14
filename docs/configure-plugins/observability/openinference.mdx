@@ -63,6 +63,7 @@ OpenInference uses the same OTLP section shape as
 | `enabled` | `false` | Must be `true` to construct and register the subscriber. |
 | `mark_projection` | `inherit` | `inherit` uses exporter-native handling; `event` forces span events; `tool` emits zero-duration OpenInference `TOOL` spans, parented as children when context is available. |
 | `mark_exclude_names` | `["llm.chunk"]` | Mark names excluded from `tool` projection; excluded marks retain exporter-native handling. Metadata `hook_event_name` aliases are also matched. |
+| `attribute_mappings` | `[]` | Ordered `{ key, alias }` copies of fully qualified projected attributes; representable source values keep their OTLP type. |
 | `transport` | `http_binary` | `http_binary` or `grpc`. |
 | `endpoint` | Exporter default | OTLP endpoint. |
 | `headers` | `{}` | String-to-string exporter headers. |
@@ -111,6 +112,18 @@ LLM token counts appear as `llm.token_count.prompt`, `llm.token_count.completion
 Cost appears as USD-denominated `llm.cost.total`. Refer to
 [Token and Cost Field Semantics](/integrate-into-frameworks/provider-response-codecs#token-and-cost-field-semantics)
 for the full mapping.
+
+NeMo Relay emits top-level `data` and `metadata` fields as typed dotted
+attributes. For example, `metadata = { tenant = "acme" }` becomes
+`openinference.metadata.tenant = "acme"`. Nested objects and arrays remain
+JSON strings at their top-level attribute. Mark category-profile, handle, and
+mark-attribute, input, and output fields flatten under
+`nemo_relay.mark.category_profile`, `nemo_relay.handle_attributes`,
+`nemo_relay.mark.attributes`, `nemo_relay.start.input`, and
+`nemo_relay.end.output`. LLM inputs continue to use the OpenInference semantic
+attributes. The OpenInference `metadata` JSON-string attribute is retained for
+backend compatibility. Use `attribute_mappings` to copy a projected field to a
+backend-specific alias.
 
 Redact sensitive event payloads with sanitize guardrails before production
 export.
