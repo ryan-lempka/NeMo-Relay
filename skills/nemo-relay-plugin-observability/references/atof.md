@@ -22,17 +22,22 @@ kind = "observability"
 enabled = true
 
 [components.config]
-version = 1
+version = 2
 
 [components.config.atof]
 enabled = true
+
+[[components.config.atof.sinks]]
+type = "file"
 output_directory = "logs"
 filename = "events.jsonl"
 mode = "append"
 ```
 
 Use `overwrite` for an isolated one-run artifact and `append` for repeated local
-runs. File output remains active when optional streaming endpoints are added.
+runs. Add a tagged `stream` sink when the same events should also be delivered
+remotely. Use `header_env` to map stream header names to environment variables,
+keeping credentials out of configuration files.
 
 Use the manual `AtofExporter` API only when the caller needs a custom subscriber
 name or explicit registration window. The lifecycle is: create, register, run
@@ -47,11 +52,11 @@ Verify the export with the following checks:
 - Check UUID and parent UUID relationships instead of relying only on event
   order.
 - Confirm sensitive fields are absent before retaining or transmitting output.
-- For streaming endpoints, verify file output separately from endpoint delivery.
+- For stream sinks, verify file output separately from remote delivery.
 
 Common failures include an unwritable output directory, an invalid mode, an
-empty endpoint URL, an unsupported endpoint transport, or shutdown occurring
-before pending events flush.
+empty stream URL, an unsupported stream transport, or shutdown occurring before
+pending events flush.
 
 For the complete exporter configuration, see
 [ATOF observability](https://docs.nvidia.com/nemo/relay/dev/configure-plugins/observability/atof).

@@ -64,20 +64,24 @@ kind = "observability"
 enabled = true
 
 [components.config]
-version = 1
+version = 2
 
 [components.config.atof]
 enabled = true
+
+[[components.config.atof.sinks]]
+type = "file"
 output_directory = "logs"
 filename = "events.jsonl"
 mode = "overwrite"
 
-[[components.config.atof.endpoints]]
+[[components.config.atof.sinks]]
+type = "stream"
 url = "http://localhost:8080/events"
 transport = "http_post"
 timeout_millis = 3000
 
-[components.config.atof.endpoints.headers]
+[components.config.atof.sinks.headers]
 authorization = "Bearer <token>"
 
 [components.config.atif]

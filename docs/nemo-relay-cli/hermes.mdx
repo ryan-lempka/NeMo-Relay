@@ -99,13 +99,21 @@ version = 1
 kind = "observability"
 enabled = true
 
+[components.config]
+version = 2
+
 [components.config.atif]
 enabled = true
 output_directory = ".nemo-relay/atif"
 
 [components.config.atof]
 enabled = true
+
+[[components.config.atof.sinks]]
+type = "file"
 output_directory = ".nemo-relay/atof"
+filename = "events.jsonl"
+mode = "append"
 
 [components.config.openinference]
 enabled = true
