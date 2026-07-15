@@ -61,8 +61,8 @@ Verify the export with the following checks:
 - For stream sinks, verify file output separately from remote delivery.
 
 Common failures include an unwritable output directory, an invalid mode, an
-empty stream URL, an unsupported stream transport, or shutdown occurring before
-pending events flush.
+empty stream URL, an unsupported stream transport, abrupt process termination,
+or interruption before `shutdown()` finishes flushing pending events.
 
 For the complete exporter configuration, refer to
 [ATOF observability](https://docs.nvidia.com/nemo/relay/dev/configure-plugins/observability/atof).

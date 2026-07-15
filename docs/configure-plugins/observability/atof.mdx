@@ -70,20 +70,24 @@ table describes each file sink:
 
 | Field | Default | Notes |
 |---|---|---|
+| `type` | Required | Sink variant. Must be `file`. |
 | `output_directory` | Current working directory | Directory containing the JSONL file. |
 | `filename` | Timestamped `nemo-relay-events-*.jsonl` | Output filename. |
 | `mode` | `append` | `append` or `overwrite`. |
 
 ## Stream Sinks
 
-Each stream sink receives the same raw ATOF JSON object that a file sink writes
-as one JSONL line. Sinks are independent: a failed stream does not block file
-output or other streams.
+Each stream sink receives the canonical ATOF event. Relay first applies the
+configured field-name policy, then uses the transport-specific encoding:
+WebSocket sends a JSON text message, while HTTP transports send a JSONL record.
+Sinks are independent: a failed stream does not block file output or other
+streams.
 
 The following table describes each stream sink:
 
 | Field | Default | Notes |
 |---|---|---|
+| `type` | Required | Sink variant. Must be `stream`. |
 | `url` | Required | Stream URL. Use `http` or `https` for `http_post` and `ndjson`, and `ws` or `wss` for `websocket`. |
 | `transport` | `http_post` | `http_post`, `websocket`, or `ndjson`. |
 | `headers` | `{}` | String-to-string headers for requests or handshakes. |
