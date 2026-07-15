@@ -187,6 +187,8 @@ from nemo_relay import plugin, scope, ScopeType
 from nemo_relay.observability import (
     AtifConfig,
     AtofConfig,
+    AtofFileSinkConfig,
+    AtofStreamSinkConfig,
     ComponentSpec,
     ObservabilityConfig,
     OtlpConfig,
@@ -198,9 +200,20 @@ config = plugin.PluginConfig(
             ObservabilityConfig(
                 atof=AtofConfig(
                     enabled=True,
-                    output_directory="logs",
-                    filename="events.jsonl",
-                    mode="overwrite",
+                    sinks=[
+                        AtofFileSinkConfig(
+                            output_directory="logs",
+                            filename="events.jsonl",
+                            mode="overwrite",
+                        ),
+                        AtofStreamSinkConfig(
+                            url="http://localhost:8080/events",
+                            transport="http_post",
+                            header_env={
+                                "authorization": "NEMO_RELAY_ATOF_AUTH_TOKEN"
+                            },
+                        ),
+                    ],
                 ),
                 atif=AtifConfig(
                     enabled=True,
@@ -257,9 +270,22 @@ void (async () => {
       version: 1,
       atof: observability.atofConfig({
         enabled: true,
-        output_directory: "logs",
-        filename: "events.jsonl",
-        mode: "overwrite",
+        sinks: [
+          {
+            type: "file",
+            output_directory: "logs",
+            filename: "events.jsonl",
+            mode: "overwrite",
+          },
+          {
+            type: "stream",
+            url: "http://localhost:8080/events",
+            transport: "http_post",
+            header_env: {
+              authorization: "NEMO_RELAY_ATOF_AUTH_TOKEN",
+            },
+          },
+        ],
       }),
       atif: observability.atifConfig({
         enabled: true,
@@ -310,7 +336,8 @@ void (async () => {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
 use nemo_relay::observability::plugin_component::{
-    AtifSectionConfig, AtofEndpointSectionConfig, AtofSectionConfig, ComponentSpec,
+    AtifSectionConfig, AtofFileSinkSectionConfig, AtofSectionConfig,
+    AtofSinkSectionConfig, AtofStreamSinkSectionConfig, ComponentSpec,
     ObservabilityConfig, OtlpSectionConfig,
 };
 use nemo_relay::plugin::{
@@ -320,16 +347,26 @@ use nemo_relay::plugin::{
 let component = ComponentSpec::new(ObservabilityConfig {
     atof: Some(AtofSectionConfig {
         enabled: true,
-        output_directory: Some("logs".into()),
-        filename: Some("events.jsonl".into()),
-        mode: "overwrite".into(),
-        endpoints: vec![AtofEndpointSectionConfig {
-            url: "http://localhost:8080/events".into(),
-            transport: "http_post".into(),
-            headers: [("authorization".into(), "Bearer <token>".into())].into(),
-            timeout_millis: 3000,
-            field_name_policy: "preserve".into(),
-        }],
+        sinks: vec![
+            AtofSinkSectionConfig::File(AtofFileSinkSectionConfig {
+                output_directory: Some("logs".into()),
+                filename: Some("events.jsonl".into()),
+                mode: "overwrite".into(),
+            }),
+            AtofSinkSectionConfig::Stream(AtofStreamSinkSectionConfig {
+                url: "http://localhost:8080/events".into(),
+                transport: "http_post".into(),
+                headers: Default::default(),
+                header_env: [(
+                    "authorization".into(),
+                    "NEMO_RELAY_ATOF_AUTH_TOKEN".into(),
+                )]
+                .into(),
+                timeout_millis: 3000,
+                field_name_policy: "preserve".into(),
+                name: None,
+            }),
+        ],
     }),
     atif: Some(AtifSectionConfig {
         enabled: true,
@@ -385,14 +422,14 @@ Ok(())
 ## Validation and Teardown
 
 Validate plugin configuration before activating it. The plugin reports
-unsupported transports, unsupported ATOF modes, invalid ATOF streaming endpoint
-URLs, non-string endpoint headers, non-positive endpoint timeouts, unsafe ATIF
+unsupported transports, unsupported ATOF modes, invalid ATOF stream sink URLs,
+non-string stream sink headers, non-positive stream sink timeouts, unsafe ATIF
 filename templates, unknown fields according to policy, and enabled exporters
 that are unavailable in the current build or target.
 
 Call `plugin.clear()` or `clear_plugin_configuration()` during teardown.
 Clearing the plugin config deregisters inferred subscribers, flushes file
-exporters, drains and closes ATOF streaming endpoints, and shuts down owned OTLP
+exporters, drains and closes ATOF stream sinks, and shuts down owned OTLP
 subscribers.
 
 Use manual subscriber/exporter APIs instead of the plugin when you need custom
