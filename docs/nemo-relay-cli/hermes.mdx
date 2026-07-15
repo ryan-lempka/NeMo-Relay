@@ -79,50 +79,6 @@ nemo-relay run \
   -- hermes
 ```
 
-## Shared Config
-
-Create `.nemo-relay/config.toml` for project defaults or
-`~/.config/nemo-relay/config.toml` for user defaults:
-
-```toml
-[agents.hermes]
-command = "hermes"
-```
-
-Then configure observability with `nemo-relay plugins edit --project` or
-`.nemo-relay/plugins.toml`:
-
-```toml
-version = 1
-
-[[components]]
-kind = "observability"
-enabled = true
-
-[components.config]
-version = 2
-
-[components.config.atif]
-enabled = true
-output_directory = ".nemo-relay/atif"
-
-[components.config.atof]
-enabled = true
-
-[[components.config.atof.sinks]]
-type = "file"
-output_directory = ".nemo-relay/atof"
-filename = "events.jsonl"
-mode = "append"
-
-[components.config.openinference]
-enabled = true
-endpoint = "http://127.0.0.1:4318/v1/traces"
-```
-
-Run `nemo-relay run --agent hermes` to use the configured command and plugin
-config. User config takes priority over project and system config.
-
 ## Hermes Hook Setup
 
 Unlike the other agents, Hermes reads hooks from `.hermes/config.yaml`. The
