@@ -109,9 +109,13 @@ Run the Relay wrapper for the host CLI installed on your machine. For example:
 nemo-relay codex -- exec "Summarize this repository."
 ```
 
+For Claude Code, run:
+
 ```bash
 nemo-relay claude -- "Summarize this repository."
 ```
+
+For Hermes, run:
 
 ```bash
 nemo-relay hermes -- -z "Summarize this repository."
@@ -130,7 +134,9 @@ when the agent exits.
 > project, or plugin hooks. Manual or source-marketplace installs can still
 > require review. Restart an already running Codex app after persistent
 > installation. On Windows, a restrictive host Job Object can keep the shared
-> Relay gateway scoped to the host process lifetime.
+> Relay gateway scoped to the host process lifetime. If the host rejects the
+> required nested assignment, persistent bootstrap fails with an actionable
+> error.
 > The Codex Desktop App has additional limitations.
 > Refer to the [Codex CLI guide](https://docs.nvidia.com/nemo/relay/nemo-relay-cli/codex) for the
 > current lifecycle, startup, and troubleshooting details.

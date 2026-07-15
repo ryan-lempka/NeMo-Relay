@@ -11,14 +11,17 @@ documentation set.
 
 ## NVIDIA NeMo Relay 0.6
 
+These notes apply to the NVIDIA NeMo Relay 0.6 release.
+
 - Codex can perform provider discovery and request `/models` before launching
   required plugin MCP servers. That cold-start request can fail and be retried;
   the captured turn and `/responses` traffic wait for verified Relay gateway
   readiness.
 - On Windows, a restrictive host Job Object can prevent a coding-agent plugin's
-  Relay gateway from breaking away. In that case the gateway remains scoped to
-  the host job and might not remain available for the full 300-second idle reuse
-  window.
+  Relay gateway from breaking away. When the host permits nested assignment,
+  the gateway remains scoped to the host job and might not remain available for
+  the full 300-second idle reuse window. If the host rejects nested assignment,
+  persistent bootstrap fails with an actionable error.
 - The Codex 0.143 plugin hook schema does not expose `SessionEnd`. Relay writes a
   cumulative trajectory snapshot for every delivered `Stop`, so the final turn
   snapshot is also the final session snapshot.

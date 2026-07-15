@@ -107,7 +107,7 @@ MCP client advertises no tools.
 MCP bootstrap is deliberately host-neutral: all three generated integrations
 use the exact `nemo-relay mcp` command. Agent identity remains only in lifecycle
 hook commands, where Relay needs it to translate each host's canonical payload.
-Legacy generated `mcp --agent <agent>` entries are recognized during forced
+Legacy-generated `mcp --agent <agent>` entries are recognized during forced
 upgrade and replaced with the single current contract.
 
 Persistent mode loads system and user Relay configuration only and starts the
@@ -251,7 +251,7 @@ installation does not add Relay groups to `~/.codex/hooks.json`.
 Since hook forwarding fails open by default, gateway or sidecar outages do not
 block the coding agent. The hook command exits successfully after logging the
 forwarding problem, so the host agent can continue even though that hook
-payload may be missing from telemetry. For wrapper-generated `hook-forward`
+payload can be missing from telemetry. For wrapper-generated `hook-forward`
 commands, add `--fail-closed` when policy requires hook delivery to block the
 agent. For generated persistent hooks, set `NEMO_RELAY_FAIL_CLOSED=1` in the hook
 execution environment. In that mode, forwarding failures return a non-zero

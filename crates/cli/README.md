@@ -39,6 +39,8 @@ with the installed `nemo-relay` command rather than link against the crate.
 
 ## What You Get
 
+The CLI provides the following capabilities:
+
 - **`nemo-relay` binary**: The executable installed by the `nemo-relay-cli`
   Cargo package.
 - **First-run setup**: Bare `nemo-relay` launches setup when no config exists,

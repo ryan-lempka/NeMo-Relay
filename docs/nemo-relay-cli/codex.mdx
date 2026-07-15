@@ -115,8 +115,11 @@ wrapper, launch agent, system user service, scheduled task, login item, or
 persistent supervisor is installed.
 
 On Windows, Relay requests Job Object breakaway when the host job permits it.
-When breakaway is unavailable, the gateway remains scoped to the host job and
-the usual 300-second idle reuse window can end early.
+When breakaway is unavailable and the host permits nested assignment, the
+gateway remains scoped to the host job and the usual 300-second idle reuse
+window can end early. If the host rejects nested assignment, persistent
+bootstrap fails with an actionable error instead of running without
+process-tree cleanup guarantees.
 
 Persistent plugin mode loads system and user Relay configuration only. It does
 not load a project's `.nemo-relay` files. The sidecar starts in the user Relay
@@ -285,7 +288,7 @@ traffic to pass through the gateway.
 
 ## Captured Events
 
-The required generated set includes `SessionStart`, `UserPromptSubmit`,
+The generated hook set includes `SessionStart`, `UserPromptSubmit`,
 `PreToolUse`, `PostToolUse`, `PermissionRequest`, `SubagentStart`,
 `SubagentStop`, `Stop`, `PreCompact`, and `PostCompact`. Relay requires the Codex
 app-server to discover exactly one enabled, trusted handler for every generated

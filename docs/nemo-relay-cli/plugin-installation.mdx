@@ -185,13 +185,15 @@ The mode never launches or recovers Relay.
 
 Relay does not claim crash-consistent exactly-once delivery
 across a gateway failure after request acceptance: there is no durable hook
-outbox or delivery-deduplication journal. The opt-in E2E assertions below verify
-exactly-once lifecycle output for the exercised healthy and cold-start paths,
-not arbitrary process crashes between request acceptance and response delivery.
+outbox or delivery-deduplication journal. Opt-in end-to-end assertions verify
+exactly-once lifecycle output for exercised healthy and cold-start paths, not
+arbitrary process crashes between request acceptance and response delivery.
 
 On Windows, Relay requests Job Object breakaway when the host job permits it.
-When breakaway is unavailable, the gateway remains scoped to the host job and
-can exit before the normal idle reuse window.
+When breakaway is unavailable and the host permits nested assignment, the
+gateway remains scoped to the host job and can exit before the normal idle reuse
+window. If the host rejects nested assignment, persistent bootstrap fails with
+an actionable error instead of running without process-tree cleanup guarantees.
 
 The compatibility fingerprint covers resolved provider, exporter, dynamic
 plugin, and relevant environment settings without exposing their values in the
@@ -333,7 +335,7 @@ This release removes the internal `nemo-relay plugin-shim` command. Refresh
 existing generated installations with `nemo-relay install <host> --force`.
 Use the following public replacements for custom automation:
 
-| Removed internal command | Public replacement |
+| Removed Internal Command | Public Replacement |
 | --- | --- |
 | `plugin-shim hook <agent>` | `hook-forward <agent> --forward-only` with the canonical lifecycle payload on standard input and an existing gateway |
 | `plugin-shim serve` | `mcp` for host-managed lifecycle, or `--bind <address>` to run a gateway directly |
