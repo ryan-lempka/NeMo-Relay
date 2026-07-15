@@ -332,7 +332,7 @@ hints can also add `llm_correlation_source`, `llm_correlation_subagent_id`,
 
 Generated hook bundles subscribe to the events needed for that mapping:
 
-| Agent | LLM lifecycle and correlation hooks | Scope, tool, and mark hooks |
+| Agent | LLM Lifecycle and Correlation Hooks | Scope, Tool, and Mark Hooks |
 | --- | --- | --- |
 | Claude Code | `UserPromptSubmit`, `Stop` | `SessionStart`, `SessionEnd`, `UserPromptExpansion`, `SubagentStart`, `SubagentStop`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PermissionRequest`, `Notification`, `PreCompact`, `PostCompact` |
 | Codex | `UserPromptSubmit`, `Stop` | `SessionStart`, `SubagentStart`, `SubagentStop`, `PreToolUse`, `PostToolUse`, `PermissionRequest`, `PreCompact`, `PostCompact` |
@@ -362,7 +362,7 @@ to the matching endpoint, and prints the endpoint response. It fails open by
 default so observability outages do not block the coding agent. Add
 `--fail-closed` only when policy requires hook delivery to block the agent.
 
-Available flags:
+Use the following flags:
 
 - `--gateway-url <url>` selects the Relay gateway that receives the payload.
 - `--forward-only` allows source plugins and custom automation to use an

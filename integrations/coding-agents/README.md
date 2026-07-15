@@ -22,6 +22,8 @@ environment variables, or shared TOML config.
 
 ## Packages
 
+The coding-agent integration uses the following host-specific surfaces:
+
 - `claude-code/` is a Claude Code plugin package. The
   `nemo-relay install claude-code` command installs a native MCP lifecycle
   client and hook entries targeting `POST /hooks/claude-code` through
@@ -257,7 +259,7 @@ agent. For generated persistent hooks, set `NEMO_RELAY_FAIL_CLOSED=1` in the hoo
 execution environment. In that mode, forwarding failures return a non-zero
 hook command status to the host.
 
-Useful `hook-forward` options:
+The following `hook-forward` options are useful:
 
 - `--gateway-url <url>` selects the Relay gateway that receives the payload.
 - `--forward-only` allows a source plugin or custom automation to use an

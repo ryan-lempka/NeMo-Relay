@@ -19,6 +19,8 @@ used by the installer.
 
 ## Files
 
+The package contains the following files:
+
 - `.codex-plugin/plugin.json` describes the Codex plugin package.
 - `.mcp.json` starts the native `nemo-relay mcp` lifecycle client and requires
   successful gateway initialization.

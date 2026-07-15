@@ -15,6 +15,8 @@ same local hook and gateway controls as Claude Code.
 
 ## Files
 
+The package contains the following files:
+
 - `.claude-plugin/plugin.json` describes the Claude Code hook package.
 - `.mcp.json` starts the native `nemo-relay mcp` lifecycle client.
 - `hooks/hooks.json` contains hook entries that run

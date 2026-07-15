@@ -26,6 +26,8 @@ with the installed `nemo-relay` command rather than link against the crate.
 
 ## Why Use It?
 
+Use the CLI for the following tasks:
+
 - **Observe existing coding agents**: Run Claude Code, Codex, or Hermes
   Agent through a local NeMo Relay gateway without changing the agent
   itself.
