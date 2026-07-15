@@ -114,7 +114,7 @@ Cost appears as USD-denominated `llm.cost.total`. Refer to
 for the full mapping.
 
 NeMo Relay emits top-level lifecycle payload fields as typed dotted attributes.
-For example, `metadata = { tenant = "acme" }` becomes
+For both start and end events, `metadata = { tenant = "acme" }` becomes
 `openinference.metadata.tenant = "acme"`. Start and end data use the
 `nemo_relay.start.data` and `nemo_relay.end.data` prefixes. Handle attributes
 and non-LLM start inputs use `nemo_relay.handle_attributes` and
