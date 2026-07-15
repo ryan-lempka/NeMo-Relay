@@ -32,6 +32,12 @@ type = "file"
 output_directory = "logs"
 filename = "events.jsonl"
 mode = "append"
+
+[[components.config.atof.sinks]]
+type = "stream"
+url = "http://localhost:8080/events"
+transport = "http_post"
+header_env = { authorization = "NEMO_RELAY_ATOF_AUTH_TOKEN" }
 ```
 
 Use `overwrite` for an isolated one-run artifact and `append` for repeated local
@@ -58,5 +64,5 @@ Common failures include an unwritable output directory, an invalid mode, an
 empty stream URL, an unsupported stream transport, or shutdown occurring before
 pending events flush.
 
-For the complete exporter configuration, see
+For the complete exporter configuration, refer to
 [ATOF observability](https://docs.nvidia.com/nemo/relay/dev/configure-plugins/observability/atof).

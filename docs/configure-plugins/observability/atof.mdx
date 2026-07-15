@@ -45,6 +45,9 @@ url = "http://localhost:8080/events"
 transport = "http_post"
 timeout_millis = 3000
 field_name_policy = "replace_dots"
+
+[components.config.atof.sinks.header_env]
+authorization = "NEMO_RELAY_ATOF_AUTH_TOKEN"
 ```
 
 This configuration registers the plugin-managed ATOF exporter and writes one
@@ -60,6 +63,17 @@ The following table describes the top-level ATOF settings:
 | `enabled` | `false` | Must be `true` to write events. |
 | `sinks` | Required when enabled | File and stream destinations that each receive every event. |
 
+## File Sinks
+
+Each file sink writes the raw event stream to one JSONL file. The following
+table describes each file sink:
+
+| Field | Default | Notes |
+|---|---|---|
+| `output_directory` | Current working directory | Directory containing the JSONL file. |
+| `filename` | Timestamped `nemo-relay-events-*.jsonl` | Output filename. |
+| `mode` | `append` | `append` or `overwrite`. |
+
 ## Stream Sinks
 
 Each stream sink receives the same raw ATOF JSON object that a file sink writes
@@ -70,18 +84,21 @@ The following table describes each stream sink:
 
 | Field | Default | Notes |
 |---|---|---|
-| `url` | Required | Endpoint URL. |
+| `url` | Required | Stream URL. Use `http` or `https` for `http_post` and `ndjson`, and `ws` or `wss` for `websocket`. |
 | `transport` | `http_post` | `http_post`, `websocket`, or `ndjson`. |
 | `headers` | `{}` | String-to-string headers for requests or handshakes. |
-| `header_env` | `{}` | Header names mapped to environment variables that supply their values. |
+| `header_env` | `{}` | Header names mapped to environment variables that supply their values. Each variable must be set, and the same header cannot also appear in `headers`. |
 | `timeout_millis` | `3000` | Per-stream timeout. Must be greater than `0`. |
 | `field_name_policy` | `preserve` | Field-name handling before Relay sends stream events. Accepted values are `preserve` and `replace_dots`. |
+| `name` | Omitted | Optional stable name for cross-component references. Stream sink names must be unique, non-empty, and have no leading or trailing whitespace. |
 
 `preserve` sends canonical ATOF field names unchanged. `replace_dots` replaces
 dots in JSON object keys with underscores recursively. If replacement produces
 a collision, Relay keeps both values and deterministically appends `_2`, `_3`,
 and later suffixes as needed. Validation rejects any other
 `sinks[i].field_name_policy` value for a stream sink.
+
+The following transports are supported:
 
 - `http_post` sends each event as one JSONL record in an HTTP `POST` request
   with `Content-Type: application/x-ndjson`. Any `2xx` response is treated as
@@ -148,7 +165,7 @@ config = plugin.PluginConfig(
                         AtofStreamSinkConfig(
                             url="http://localhost:8080/events",
                             transport="http_post",
-                        )
+                        ),
                     ],
                 )
             )
@@ -180,23 +197,28 @@ const observability = require("nemo-relay-node/observability");
 
 void (async () => {
   await plugin.initialize({
-  version: 1,
-  components: [
-    observability.ComponentSpec({
-      version: 2,
-      atof: observability.atofConfig({
-        enabled: true,
-        sinks: [
-          { type: "file", output_directory: "logs", filename: "events.jsonl", mode: "overwrite" },
-          {
-            type: "stream",
-            url: "http://localhost:8080/events",
-            transport: "http_post",
-          },
-        ],
+    version: 1,
+    components: [
+      observability.ComponentSpec({
+        version: 2,
+        atof: observability.atofConfig({
+          enabled: true,
+          sinks: [
+            {
+              type: "file",
+              output_directory: "logs",
+              filename: "events.jsonl",
+              mode: "overwrite",
+            },
+            {
+              type: "stream",
+              url: "http://localhost:8080/events",
+              transport: "http_post",
+            },
+          ],
+        }),
       }),
-    }),
-  ],
+    ],
   });
 
   try {
@@ -214,53 +236,54 @@ void (async () => {
 
 <Tab title="Rust" language="rust">
 ```rust
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
 use nemo_relay::observability::plugin_component::{
-    AtofFileSinkSectionConfig, AtofSinkSectionConfig, AtofSectionConfig,
+    AtofFileSinkSectionConfig, AtofSectionConfig, AtofSinkSectionConfig,
     AtofStreamSinkSectionConfig, ComponentSpec, ObservabilityConfig,
 };
 use nemo_relay::plugin::{
-    clear_plugin_configuration, initialize_plugins, validate_plugin_config, PluginConfig,
+    PluginConfig, clear_plugin_configuration, initialize_plugins, validate_plugin_config,
 };
 
-let component = ComponentSpec::new(ObservabilityConfig {
-    atof: Some(AtofSectionConfig {
-        enabled: true,
-        sinks: vec![
-            AtofSinkSectionConfig::File(AtofFileSinkSectionConfig {
-                output_directory: Some("logs".into()),
-                filename: Some("events.jsonl".into()),
-                mode: "overwrite".into(),
-            }),
-            AtofSinkSectionConfig::Stream(AtofStreamSinkSectionConfig {
-                url: "http://localhost:8080/events".into(),
-                transport: "http_post".into(),
-                headers: Default::default(),
-                header_env: Default::default(),
-                timeout_millis: 3000,
-                field_name_policy: "replace_dots".into(),
-            }),
-        ],
-    }),
-    ..ObservabilityConfig::default()
-});
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let component = ComponentSpec::new(ObservabilityConfig {
+        atof: Some(AtofSectionConfig {
+            enabled: true,
+            sinks: vec![
+                AtofSinkSectionConfig::File(AtofFileSinkSectionConfig {
+                    output_directory: Some("logs".into()),
+                    filename: Some("events.jsonl".into()),
+                    mode: "overwrite".into(),
+                }),
+                AtofSinkSectionConfig::Stream(AtofStreamSinkSectionConfig {
+                    url: "http://localhost:8080/events".into(),
+                    transport: "http_post".into(),
+                    headers: Default::default(),
+                    header_env: Default::default(),
+                    timeout_millis: 3000,
+                    field_name_policy: "replace_dots".into(),
+                    name: None,
+                }),
+            ],
+        }),
+        ..ObservabilityConfig::default()
+    });
 
-let config = PluginConfig {
-    version: 1,
-    components: vec![component.into()],
-    policy: Default::default(),
-};
+    let config = PluginConfig {
+        version: 1,
+        components: vec![component.into()],
+        policy: Default::default(),
+    };
 
-let report = validate_plugin_config(&config);
-assert!(!report.has_errors());
+    let report = validate_plugin_config(&config);
+    assert!(!report.has_errors());
 
-let _active = initialize_plugins(config).await?;
+    let _active = initialize_plugins(config).await?;
 
-// Run instrumented application work here.
+    // Run instrumented application work here.
 
-clear_plugin_configuration()?;
-Ok(())
+    clear_plugin_configuration()?;
+    Ok(())
 }
 ```
 
@@ -326,9 +349,9 @@ use nemo_relay::observability::atof::{
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = AtofExporterConfig::new().with_stream_sink(AtofStreamSinkConfig::new(
-            "http://localhost:8080/events",
-            AtofEndpointTransport::HttpPost,
-        ));
+        "http://localhost:8080/events",
+        AtofEndpointTransport::HttpPost,
+    ));
     let exporter = AtofExporter::new(config)?;
     exporter.register("atof-exporter")?;
 
@@ -346,6 +369,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 </Tabs>
 
 ## Common Configuration and Runtime Issues
+
+Common configuration and runtime issues include:
 
 - A file sink's `mode` is not `append` or `overwrite`.
 - A stream `sinks[i].url` is empty, its `transport` is not supported, or its

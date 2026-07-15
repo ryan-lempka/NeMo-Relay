@@ -81,8 +81,8 @@ url = "http://localhost:8080/events"
 transport = "http_post"
 timeout_millis = 3000
 
-[components.config.atof.sinks.headers]
-authorization = "Bearer <token>"
+[components.config.atof.sinks.header_env]
+authorization = "NEMO_RELAY_ATOF_AUTH_TOKEN"
 
 [components.config.atif]
 enabled = true

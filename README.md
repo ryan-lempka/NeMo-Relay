@@ -83,13 +83,13 @@ The editor creates or updates the nearest project plugin file at
 then configure these sections:
 
 1. Toggle the Observability component on.
-2. Open `ATOF`. Toggle the section `[on]`.
+2. Open **ATOF**. Toggle the section **[on]**.
 
    Add a file sink, then optionally set its `output_directory` to
    `.nemo-relay/atof`, `filename` to `events.jsonl`, and `mode` to
    `overwrite`. Add stream sinks when the same events should also be sent to
    remote collectors.
-3. Open `ATIF`. Toggle the section `[on]`.
+3. Open **ATIF**. Toggle the section **[on]**.
 
    Optionally set:
    - `output_directory` to `.nemo-relay/atif`
