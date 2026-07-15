@@ -32,14 +32,14 @@ upstream as [openai/codex#21639](https://github.com/openai/codex/issues/21639).
 
 Codex multi-agent v2 marks the `spawn_agent` delegation message as encrypted in
 the tool schema. The Responses service returns an opaque value in the tool call,
-and Codex forwards that value to the child as
-`agent_message.encrypted_content`. NeMo Relay observes the Responses API
-traffic but does not hold the key that the Responses service uses to decrypt the
-child message. As a result, ATOF, ATIF, OpenTelemetry, and OpenInference output
-can contain observed parent and child activity but cannot recover the delegated
-task text from the encrypted value. When Codex does not expose a lifecycle edge
-for the built-in collaboration call, the parent and child can also appear as
-separate trajectories instead of one linked delegation.
+and Codex forwards that value to the child as an `encrypted_content` item in an
+`agent_message`. NeMo Relay observes the Responses API traffic but does not hold
+the key that the Responses service uses to decrypt the child message. As a
+result, ATOF, ATIF, OpenTelemetry, and OpenInference output can contain observed
+parent and child activity but cannot recover the delegated task text from the
+encrypted value. When Codex does not expose a lifecycle edge for the built-in
+collaboration call, the parent and child can also appear as separate
+trajectories instead of one linked delegation.
 
 OpenAI introduced this transport in
 [openai/codex#26210](https://github.com/openai/codex/pull/26210). Refer to
