@@ -76,8 +76,8 @@ Claude Code, and configured Hermes processes can share the gateway and
 heartbeat it every 30 seconds. The sidecar
 remains available for 300 idle seconds after the final client closes. If it dies
 while MCP remains open, one endpoint-coordinated restart is attempted across
-all overlapping MCP clients and persistent hook deliveries. The MCP server
-advertises no tools.
+all overlapping MCP clients. Persistent hooks wait for the MCP-owned gateway
+but do not initiate recovery. The MCP server advertises no tools.
 
 On Windows, Relay requests Job Object breakaway only when the host job permits
 it. Under a restrictive Job Object that permits nested jobs, Relay keeps the
@@ -96,17 +96,17 @@ credential variable names without storing values.
 The installer also derives a per-user HMAC proof from Relay's owner-only
 bootstrap key and places the proof in the managed provider headers. It writes
 the secret-bearing Codex config with an owner-only mode on Unix or a protected
-owner/System DACL on Windows. The shared
-sidecar requires that proof before it injects a forwarded provider credential,
+owner/System DACL on Windows. The shared sidecar requires that proof before it
+injects a forwarded provider credential,
 then removes the proof before middleware, observability, and upstream
 forwarding. This prevents an unrelated loopback caller from spending the
 sidecar's credentials.
 
 Installer-owned hook commands pin `http://127.0.0.1:47632` and their private
-install-generation file explicitly. Each delivery temporarily joins the same
-recovery cohort as the MCP clients, so it cannot create an unaccounted second
-replacement. An ambient `NEMO_RELAY_GATEWAY_URL` cannot split hook traffic from
-the required MCP-managed gateway.
+install-generation file explicitly. Each delivery waits for and authenticates
+the MCP-managed gateway, then sends the payload once; it never starts or
+recovers Relay. An ambient `NEMO_RELAY_GATEWAY_URL` cannot split hook traffic
+from the required MCP-managed gateway.
 
 If the Relay version, user configuration, or forwarded credentials change, an
 MCP client refuses to reuse the incompatible sidecar. `nemo-relay install codex
@@ -423,7 +423,7 @@ codex plugin remove nemo-relay-plugin@nemo-relay-local
 codex plugin marketplace remove nemo-relay-local
 codex plugin marketplace add "$MARKETPLACE_ROOT"
 codex plugin add nemo-relay-plugin@nemo-relay-local
-nemo-relay install codex
+nemo-relay install codex --force
 ```
 
 To uninstall, remove NeMo Relay's Codex config and exact plugin-hook trust,

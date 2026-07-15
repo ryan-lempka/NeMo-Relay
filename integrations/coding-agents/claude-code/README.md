@@ -125,7 +125,7 @@ wrapper, which injects ephemeral hooks per run.
 
 ## Verify
 
-Run a Claude Code session that starts, uses one simple tool, and ends. Confirm
+Run a Claude Code session that starts, uses one tool, and ends. Confirm
 that ATIF was written:
 
 ```bash
@@ -184,9 +184,10 @@ that gateway.
 
 The generated MCP entry sets `alwaysLoad: true`. Claude Code therefore waits
 for the MCP connection during startup, while `nemo-relay mcp` starts or reuses
-the gateway immediately when its process launches. The command hook retains a
-same-gateway recovery path for an unexpected runtime outage. The MCP server
-advertises no tools and does not add tool definitions to Claude's context.
+the gateway immediately when its process launches. The command hook waits for
+and authenticates that MCP-owned gateway but never starts or recovers it. The
+MCP server advertises no tools and does not add tool definitions to Claude's
+context.
 
 No separate provider-routing command is required when installing through
 `nemo-relay install`.
@@ -297,8 +298,9 @@ claude
 ```
 
 The installed MCP client starts the Relay sidecar before Claude Code proceeds
-with session startup. The hook forwarding command retains one coordinated
-outage-recovery attempt, and provider traffic is routed through
+with session startup. If the sidecar becomes unhealthy, overlapping MCP clients
+coordinate one recovery attempt. Hook forwarding waits for that recovery but
+does not initiate it. Provider traffic is routed through
 `ANTHROPIC_BASE_URL=http://127.0.0.1:47632`.
 
 To upgrade manually, replace the plugin directory contents with the new package,

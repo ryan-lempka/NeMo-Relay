@@ -124,8 +124,9 @@ and provider settings for that launched process, then shuts the gateway down
 when the agent exits.
 
 > [!WARNING]
-> `nemo-relay install codex` automatically trusts only the exact hooks owned by
-> `nemo-relay-plugin@nemo-relay-local`. It does not trust unrelated user,
+> The transparent wrapper supplies process-local trust for its generated Codex
+> hooks. `nemo-relay install codex` trusts only the exact hooks owned by
+> `nemo-relay-plugin@nemo-relay-local`; it does not trust unrelated user,
 > project, or plugin hooks. Manual or source-marketplace installs can still
 > require review. Restart an already running Codex app after persistent
 > installation. On Windows, a restrictive host Job Object can keep the shared

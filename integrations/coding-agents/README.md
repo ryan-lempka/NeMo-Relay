@@ -92,14 +92,14 @@ returns its initialization response only after Relay identity, version, and
 bootstrap-protocol readiness are verified. Concurrent Codex, Claude Code, and
 Hermes processes share the gateway and heartbeat it while their MCP stdio
 connections remain open; the gateway exits after the final client's idle
-timeout. Process-held MCP and hook leases share one endpoint recovery cohort,
-which permits only one coordinated restart across all overlapping participants,
-including staggered heartbeats. Codex requires
+timeout. Overlapping MCP clients share one endpoint recovery cohort, which
+permits only one coordinated restart, including across staggered heartbeats.
+Codex requires
 MCP initialization before the captured turn. Claude
 Code marks Relay MCP as `alwaysLoad`, so it also waits for the connection before
-session startup. Hermes starts MCP discovery asynchronously, so its
-generation-fenced command hook temporarily joins the same recovery cohort for
-an early hook. Installed MCP entries and hook commands carry both their
+session startup. Hermes starts MCP discovery asynchronously, so an early
+generation-fenced command hook waits for the MCP-owned gateway. Installed MCP
+entries and hook commands carry both their
 generation-file path and the immutable identity expected there, so cached host
 configuration cannot adopt a replacement installation at the same path. The
 MCP client advertises no tools.
@@ -238,10 +238,12 @@ Transparent Claude Code and Codex hooks call
 input. The wrapper-owned command embeds the ephemeral per-run gateway URL and
 is marked as transparent so it never starts or recovers the fixed gateway.
 
-Persistent Claude Code and Codex hooks, and Hermes hooks in both modes, call
-`nemo-relay hook-forward <agent>`. During a transparent Hermes run, the same
-canonical command prefers the wrapper's dynamic gateway URL. Otherwise, it
-preflights, starts, or recovers the fixed shared gateway.
+Persistent Claude Code, Codex, and Hermes hooks call
+`nemo-relay hook-forward <agent>` with the fixed gateway and an
+installer-owned generation fence. They wait for and authenticate the
+MCP-owned gateway, then send the payload once. They never start or recover the
+gateway. Transparent Hermes hooks instead embed the wrapper's dynamic gateway
+URL.
 
 For Codex, the installed plugin file is the sole persistent Relay hook source;
 installation does not add Relay groups to `~/.codex/hooks.json`.
