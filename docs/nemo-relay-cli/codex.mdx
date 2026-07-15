@@ -48,31 +48,24 @@ upstream auditability limitation and
 [NVIDIA/NeMo-Relay#425](https://github.com/NVIDIA/NeMo-Relay/issues/425) for the
 NeMo Relay trace impact.
 
-When the selected Codex model and runtime allow the legacy multi-agent path,
-disable multi-agent v2 to preserve readable delegated task content in new
-traces. Add the following setting to `~/.codex/config.toml` for persistent Codex
-configuration:
+NeMo Relay disables multi-agent v2 for Relay-managed Codex sessions so that
+Codex uses the legacy multi-agent path and new traces retain readable delegated
+task content when the selected model and runtime support that path. You do not
+need to disable the feature manually:
 
-```toml
-[features.multi_agent_v2]
-enabled = false
-```
+- `nemo-relay codex` and `nemo-relay run -- codex` inject the following
+  root-level Codex override for that process:
+  `features.multi_agent_v2.enabled=false`.
+- `nemo-relay install codex` writes the equivalent setting to
+  `~/.codex/config.toml`. Uninstalling the Codex integration restores the
+  previous setting or removes the Relay-managed setting if none existed.
 
-For a transparent run, pass the setting as a Codex root-level override:
-
-```bash
-nemo-relay codex -- \
-  --config 'features.multi_agent_v2.enabled=false'
-```
-
-Start a new Codex process after changing the setting. Confirm that Codex uses
-the legacy tool surface because some model or product configurations can select
-multi-agent v2 despite this feature setting. NeMo Relay cannot override that
-selection or decrypt a v2 payload.
-
-This setting is a compatibility and observability workaround. It affects only
-newly captured traces, does not decrypt existing values, and does not change TLS
-protection for traffic between Codex, NeMo Relay, and the upstream endpoint.
+Confirm that Codex uses the legacy tool surface because a later user-provided
+Codex override or an upstream model or product decision can still select
+multi-agent v2. NeMo Relay cannot decrypt a v2 payload. Disabling the feature
+affects only newly captured traces, does not decrypt existing values, and does
+not change TLS protection for traffic between Codex, NeMo Relay, and the
+upstream endpoint.
 
 ## Transparent Run
 
