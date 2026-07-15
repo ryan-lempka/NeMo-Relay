@@ -28,6 +28,45 @@ upstream as [openai/codex#21639](https://github.com/openai/codex/issues/21639).
 
 </Warning>
 
+## Multi-Agent Delegation Traces
+
+Codex multi-agent v2 marks the `spawn_agent` delegation message as encrypted in
+the tool schema. The Responses service returns an opaque value in the tool call,
+and Codex forwards that value to the child as
+`agent_message.encrypted_content`. NeMo Relay observes the Responses API
+traffic but does not hold the key that the Responses service uses to decrypt the
+child message. As a result, ATOF, ATIF, OpenTelemetry, and OpenInference output
+can record the parent and child activity but cannot recover the delegated task
+text from the encrypted value.
+
+OpenAI introduced this transport in
+[openai/codex#26210](https://github.com/openai/codex/pull/26210). Refer to
+[openai/codex#28058](https://github.com/openai/codex/issues/28058) for the
+upstream auditability limitation and
+[NVIDIA/NeMo-Relay#425](https://github.com/NVIDIA/NeMo-Relay/issues/425) for the
+NeMo Relay trace impact.
+
+To preserve readable delegated task content in traces, disable multi-agent v2
+and use the legacy multi-agent path. Add the following setting to
+`~/.codex/config.toml` for persistent Codex configuration:
+
+```toml
+[features.multi_agent_v2]
+enabled = false
+```
+
+For a transparent run, pass the setting as a Codex root-level override:
+
+```bash
+nemo-relay codex -- \
+  --config 'features.multi_agent_v2.enabled=false'
+```
+
+This setting is a compatibility and observability workaround. It does not
+decrypt previously captured values, and it does not change TLS protection for
+traffic between Codex, NeMo Relay, and the upstream endpoint. Start a new Codex
+process after changing the setting.
+
 ## Transparent Run
 
 Use the wrapper for no-install local observability:
