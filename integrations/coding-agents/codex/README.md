@@ -253,7 +253,7 @@ for context.
 
 ## Verify
 
-Run a Codex session that starts, uses one simple tool, and ends. For a
+Run a Codex session that starts, uses one tool, and ends. For a
 transparent project run, confirm that ATIF was written:
 
 ```bash

@@ -123,7 +123,8 @@ Hermes, Claude Code, and Codex MCP clients can share the native gateway on
 `127.0.0.1:47632`. Every `nemo-relay mcp` process acquires that gateway as soon
 as it launches. Claude Code uses `alwaysLoad` to wait for the MCP connection;
 Hermes starts discovery asynchronously, so its canonical hook command also
-closes the remaining cold-start race and retries the original payload once.
+closes the remaining cold-start race by waiting for gateway readiness before it
+sends the original payload once.
 
 Plugin installation writes a local marketplace, installs the generated
 `nemo-relay-plugin`, and configures the host-specific hook and provider routing

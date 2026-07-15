@@ -264,7 +264,8 @@ newly required forwarded environment names and recommends
 
 For Claude Code, doctor also validates version 2.1.121 or newer, the generated
 `alwaysLoad` MCP server, and its generation marker. A stopped sidecar remains
-informational because the next MCP process start or hook retry starts it.
+informational because the next MCP process starts it. Persistent hooks wait for
+that MCP-owned gateway instead of starting it themselves.
 
 For Hermes, doctor validates Hermes Agent 0.18.2 or newer. It reads the Relay
 executable from the managed Hermes MCP entry, verifies that exact executable
@@ -328,10 +329,9 @@ longer parses. A forced install recognizes and replaces the former
 with `nemo-relay install <host> --force` before relying on generated config from
 this release.
 
-This release removes the internal `nemo-relay plugin-shim` command. Existing
-generated installations should be refreshed with
-`nemo-relay install <host> --force`. Use the following public replacements for
-custom automation:
+This release removes the internal `nemo-relay plugin-shim` command. Refresh
+existing generated installations with `nemo-relay install <host> --force`.
+Use the following public replacements for custom automation:
 
 | Removed internal command | Public replacement |
 | --- | --- |
