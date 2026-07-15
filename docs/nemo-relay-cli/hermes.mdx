@@ -141,6 +141,10 @@ Relay installs these Hermes hooks:
 - Tool: `pre_tool_call` and `post_tool_call`.
 - Subagent: `subagent_start` and `subagent_stop`.
 
+Hermes `skill_view` pre-tool calls emit observed `skill.load` marks. The mark
+stores the skill name in `data.skill_name` and the source and tool name in
+metadata. It does not retain skill paths.
+
 The API-request hooks are authoritative for hook-backed model lifecycle.
 `pre_llm_call` and `post_llm_call` remain private correlation hints. Gateway
 routing is a separate observation path. If API-request hooks and gateway
