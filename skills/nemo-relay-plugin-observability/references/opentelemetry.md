@@ -21,7 +21,12 @@ OpenTelemetry Collector, Jaeger, Tempo, or Honeycomb.
 - OpenTelemetry export maps NeMo Relay runtime events into OTLP traces for
   tracing backends and collectors.
 - Configure `transport`, `endpoint`, `service_name`, optional namespace and
-  version, instrumentation scope, headers, resource attributes, and timeout.
+  version, instrumentation scope, headers, resource attributes, optional
+  `attribute_mappings`, and timeout.
+- Top-level lifecycle payload fields become typed dotted OTLP attributes.
+  Nested objects and arrays remain JSON strings, and `null` fields are omitted.
+- Use `attribute_mappings` to copy a fully qualified projected attribute to a
+  backend-specific alias without changing its OTLP type.
 - Start with `http_binary` transport and an OTLP traces endpoint such as a local
   collector on port `4318` unless deployment requirements differ.
 - `grpc` transport is available when a Tokio runtime is active.

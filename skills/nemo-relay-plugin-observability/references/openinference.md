@@ -21,7 +21,12 @@ for example Arize Phoenix or another OpenInference-aware OTLP backend.
 - OpenInference export is for OTLP backends that understand model-centric
   OpenInference semantic conventions.
 - Configure `transport`, `endpoint`, `service_name`, optional namespace and
-  version, instrumentation scope, headers, resource attributes, and timeout.
+  version, instrumentation scope, headers, resource attributes, optional
+  `attribute_mappings`, and timeout.
+- Top-level lifecycle payload fields become typed dotted OTLP attributes.
+  Nested objects and arrays remain JSON strings, and `null` fields are omitted.
+- Use `attribute_mappings` to copy a fully qualified projected attribute to a
+  backend-specific alias without changing its OTLP type.
 - Start with `http_binary` transport and an OTLP/HTTP traces endpoint. Use
   `grpc` only when a Tokio runtime is active.
 - Scope, tool, and LLM start inputs become `input.value`.
