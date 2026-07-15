@@ -114,16 +114,17 @@ Cost appears as USD-denominated `llm.cost.total`. Refer to
 for the full mapping.
 
 NeMo Relay emits top-level lifecycle payload fields as typed dotted attributes.
-For both start and end events, `metadata = { tenant = "acme" }` becomes
-`openinference.metadata.tenant = "acme"`. Start and end data use the
-`nemo_relay.start.data` and `nemo_relay.end.data` prefixes. Handle attributes
-and non-LLM start inputs use `nemo_relay.handle_attributes` and
-`nemo_relay.start.input`. End outputs use `nemo_relay.end.output`. Mark data,
-metadata, attributes, and category-profile fields use the corresponding
-`nemo_relay.mark.*` prefixes. LLM inputs continue to use OpenInference semantic
-attributes. Nested objects and arrays remain JSON strings at their top-level
-attribute, and `null` fields are omitted. The OpenInference `metadata`
-JSON-string attribute is retained for backend compatibility. Use
+Lifecycle metadata uses the `openinference.metadata` prefix, so
+`metadata = { tenant = "acme" }` becomes
+`openinference.metadata.tenant = "acme"`. Non-LLM start events use
+`nemo_relay.start.data`, `nemo_relay.start.input`, and
+`nemo_relay.handle_attributes`. End events use `nemo_relay.end.data` and
+`nemo_relay.end.output`. LLM spans use OpenInference semantic input attributes
+and final end-event metadata instead of the generic start projections. Mark
+data, metadata, attributes, and category-profile fields use the corresponding
+`nemo_relay.mark.*` prefixes. Nested objects and arrays remain JSON strings at
+their top-level attribute, and `null` fields are omitted. The OpenInference
+`metadata` JSON-string attribute is retained for backend compatibility. Use
 `attribute_mappings` to copy a projected field to a backend-specific alias.
 
 Redact sensitive event payloads with sanitize guardrails before production
