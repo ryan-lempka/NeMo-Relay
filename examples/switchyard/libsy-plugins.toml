@@ -1,0 +1,46 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# In-process libsy decision backend: no Switchyard server, no Decision API.
+version = 1
+
+[[components]]
+kind = "switchyard"
+enabled = true
+
+[components.config]
+mode = "enforce"
+decision_backend = "libsy"
+request_materialization = "summary_only"
+context_mode = "payload_only"
+max_retries = 3
+recent_message_count = 8
+enabled_inbound_profiles = ["openai_chat"]
+
+[components.config.libsy]
+algorithm = "llm_classifier"
+classifier_target = "classifier"
+strong_target = "strong"
+weak_target = "weak"
+threshold = 0.5
+
+[components.config.default_targets]
+openai_chat = "weak"
+
+[components.config.targets.classifier]
+model = "classifier-model"
+protocol = "openai_chat"
+endpoint = "/v1/chat/completions"
+base_url = "http://127.0.0.1:4102"
+
+[components.config.targets.strong]
+model = "strong-model"
+protocol = "openai_chat"
+endpoint = "/v1/chat/completions"
+base_url = "http://127.0.0.1:4102"
+
+[components.config.targets.weak]
+model = "weak-model"
+protocol = "openai_chat"
+endpoint = "/v1/chat/completions"
+base_url = "http://127.0.0.1:4102"

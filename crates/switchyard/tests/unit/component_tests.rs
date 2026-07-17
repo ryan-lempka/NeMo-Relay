@@ -1737,3 +1737,244 @@ async fn same_protocol_targets_route_nonportable_streaming_requests() {
     assert_eq!(output.len(), 1);
     assert_eq!(decisions.lock().unwrap().len(), 1);
 }
+
+use crate::libsy_backend::LibsyAlgorithmKind;
+
+fn libsy_config() -> SwitchyardConfig {
+    SwitchyardConfig {
+        decision_backend: DecisionBackend::Libsy,
+        libsy: Some(LibsyBackendConfig {
+            algorithm: LibsyAlgorithmKind::LlmClassifier,
+            classifier_target: "classifier-chat".into(),
+            strong_target: "strong-chat".into(),
+            weak_target: "weak-chat".into(),
+            threshold: 0.5,
+        }),
+        request_materialization: RequestMaterialization::SummaryOnly,
+        context_mode: ContextMode::PayloadOnly,
+        decision_timeout_millis: 1_000,
+        targets: BTreeMap::from([
+            (
+                "classifier-chat".into(),
+                binding(WireProtocol::OpenaiChat, "classifier-model"),
+            ),
+            (
+                "strong-chat".into(),
+                binding(WireProtocol::OpenaiChat, "strong-model"),
+            ),
+            (
+                "weak-chat".into(),
+                binding(WireProtocol::OpenaiChat, "weak-model"),
+            ),
+            (
+                "fallback-chat".into(),
+                binding(WireProtocol::OpenaiChat, "fallback"),
+            ),
+            (
+                "fallback-responses".into(),
+                binding(WireProtocol::OpenaiResponses, "fallback"),
+            ),
+            (
+                "fallback-anthropic".into(),
+                binding(WireProtocol::AnthropicMessages, "fallback"),
+            ),
+        ]),
+        default_targets: ProtocolDefaults {
+            openai_chat: "fallback-chat".into(),
+            openai_responses: "fallback-responses".into(),
+            anthropic_messages: "fallback-anthropic".into(),
+        },
+        ..SwitchyardConfig::default()
+    }
+}
+
+fn chat_completion(model: &str, content: &str) -> Json {
+    json!({
+        "id": "resp-1",
+        "object": "chat.completion",
+        "created": 0,
+        "model": model,
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": content},
+            "finish_reason": "stop"
+        }],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+    })
+}
+
+fn scoring_next(score: &'static str) -> (LlmExecutionNextFn, Arc<Mutex<Vec<LlmRequest>>>) {
+    let calls = Arc::new(Mutex::new(Vec::<LlmRequest>::new()));
+    let seen = Arc::clone(&calls);
+    let next: LlmExecutionNextFn = Arc::new(move |request| {
+        let seen = Arc::clone(&seen);
+        Box::pin(async move {
+            let model = request.content["model"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
+            seen.lock().unwrap().push(request);
+            let content = if model == "classifier-model" {
+                score.to_string()
+            } else {
+                format!("answer from {model}")
+            };
+            Ok(chat_completion(&model, &content))
+        })
+    });
+    (next, calls)
+}
+
+#[tokio::test]
+async fn libsy_backend_routes_strong_on_high_classifier_score() {
+    let runtime = SwitchyardRuntime::new(libsy_config()).unwrap();
+    let (next, calls) = scoring_next("0.9");
+    let response = runtime
+        .execute_buffered("openai.chat_completions", chat_request(), next)
+        .await
+        .unwrap();
+    assert_eq!(
+        response["choices"][0]["message"]["content"],
+        json!("answer from strong-model")
+    );
+    let calls = calls.lock().unwrap();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].content["model"], json!("classifier-model"));
+    assert_eq!(calls[1].content["model"], json!("strong-model"));
+    for call in calls.iter() {
+        assert_eq!(
+            call.headers["x-nemo-relay-internal-dispatch-url"],
+            json!("http://127.0.0.1:9999/v1/chat/completions")
+        );
+    }
+}
+
+#[tokio::test]
+async fn libsy_backend_routes_weak_on_low_classifier_score() {
+    let runtime = SwitchyardRuntime::new(libsy_config()).unwrap();
+    let (next, calls) = scoring_next("0.1");
+    let response = runtime
+        .execute_buffered("openai.chat_completions", chat_request(), next)
+        .await
+        .unwrap();
+    assert_eq!(
+        response["choices"][0]["message"]["content"],
+        json!("answer from weak-model")
+    );
+    let calls = calls.lock().unwrap();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[1].content["model"], json!("weak-model"));
+}
+
+/// SSE-style chat chunks for one streamed provider answer under `model`.
+fn stream_chunks(model: &str, content: &str) -> Vec<FlowResult<Json>> {
+    vec![
+        Ok(json!({
+            "id": "chatcmpl-libsy",
+            "object": "chat.completion.chunk",
+            "model": model,
+            "choices": [{
+                "index": 0,
+                "delta": {"role": "assistant", "content": content},
+                "finish_reason": Json::Null
+            }]
+        })),
+        Ok(json!({
+            "id": "chatcmpl-libsy",
+            "object": "chat.completion.chunk",
+            "model": model,
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]
+        })),
+    ]
+}
+
+#[tokio::test]
+async fn libsy_backend_routes_streamed_requests() {
+    let runtime = SwitchyardRuntime::new(libsy_config()).unwrap();
+    let dispatched = Arc::new(Mutex::new(Vec::<LlmRequest>::new()));
+    let seen = Arc::clone(&dispatched);
+    let next: LlmStreamExecutionNextFn = Arc::new(move |request| {
+        let seen = Arc::clone(&seen);
+        Box::pin(async move {
+            let model = request.content["model"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
+            seen.lock().unwrap().push(request);
+            let content = if model == "classifier-model" {
+                "0.1".to_string()
+            } else {
+                format!("answer from {model}")
+            };
+            Ok(Box::pin(futures_stream::iter(stream_chunks(&model, &content))) as LlmJsonStream)
+        })
+    });
+    let mut request = chat_request();
+    request.content["stream"] = json!(true);
+    let stream = runtime
+        .execute_stream("openai.chat_completions", request, next)
+        .await
+        .unwrap();
+    let output = stream.collect::<Vec<_>>().await;
+    let text = output
+        .iter()
+        .filter_map(|item| item.as_ref().ok())
+        .filter_map(|chunk| chunk["choices"][0]["delta"]["content"].as_str())
+        .collect::<String>();
+    assert_eq!(text, "answer from weak-model");
+    let dispatched = dispatched.lock().unwrap();
+    let models = dispatched
+        .iter()
+        .map(|request| request.content["model"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(models, vec![json!("classifier-model"), json!("weak-model")]);
+    // The classifier call is re-encoded from the IR with streaming forced on;
+    // the routed call passes the original streaming body through raw.
+    assert_eq!(dispatched[0].content["stream"], json!(true));
+    assert_eq!(dispatched[1].content["stream"], json!(true));
+}
+
+#[test]
+fn libsy_configuration_validation_rejects_incomplete_configs() {
+    let mut missing_block = libsy_config();
+    missing_block.libsy = None;
+    assert!(SwitchyardRuntime::new(missing_block).is_err());
+
+    let mut unknown_target = libsy_config();
+    if let Some(libsy) = unknown_target.libsy.as_mut() {
+        libsy.strong_target = "missing".into();
+    }
+    assert!(SwitchyardRuntime::new(unknown_target).is_err());
+
+    let mut bad_threshold = libsy_config();
+    if let Some(libsy) = bad_threshold.libsy.as_mut() {
+        libsy.threshold = 1.5;
+    }
+    assert!(SwitchyardRuntime::new(bad_threshold).is_err());
+
+    let mut observe_only = libsy_config();
+    observe_only.mode = RoutingMode::ObserveOnly;
+    assert!(SwitchyardRuntime::new(observe_only).is_err());
+}
+
+#[tokio::test]
+async fn libsy_same_protocol_routes_requests_with_provider_extensions() {
+    // Claude Code puts `cache_control` on requests; the portability gate must
+    // not divert them when every routable target speaks the inbound protocol.
+    let runtime = SwitchyardRuntime::new(libsy_config()).unwrap();
+    let (next, calls) = scoring_next("0.1");
+    let mut request = chat_request();
+    request.content["messages"][3]["cache_control"] = json!({"type": "ephemeral"});
+    let response = runtime
+        .execute_buffered("openai.chat_completions", request, next)
+        .await
+        .unwrap();
+    assert_eq!(
+        response["choices"][0]["message"]["content"],
+        json!("answer from weak-model")
+    );
+    let calls = calls.lock().unwrap();
+    assert_eq!(calls.len(), 2, "classifier + routed call, no fallback");
+    assert_eq!(calls[0].content["model"], json!("classifier-model"));
+    assert_eq!(calls[1].content["model"], json!("weak-model"));
+}

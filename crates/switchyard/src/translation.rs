@@ -1,13 +1,16 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use std::sync::Arc;
+
 use nemo_relay::api::llm::LlmRequest;
 use nemo_relay::error::{FlowError, Result};
 use serde_json::{Map, Value as Json};
 use switchyard_translation::{
-    ContentBlock, DeterministicIdPolicy, ImageSource, LlmRequest as TranslationRequest,
-    LossyConversionPolicy, PreservationPolicy, Role, TargetCapabilities, TranslationDiagnostic,
-    TranslationEngine, TranslationPolicy, UnknownFieldPolicy, WireFormat,
+    AggLlmResponse, ContentBlock, DeterministicIdPolicy, ImageSource,
+    LlmRequest as TranslationRequest, LlmResponseChunk, LossyConversionPolicy, PreservationPolicy,
+    Role, StreamCodec, StreamCodecRegistry, StreamTranslationState, TargetCapabilities,
+    TranslationDiagnostic, TranslationEngine, TranslationPolicy, UnknownFieldPolicy, WireFormat,
 };
 
 use crate::component::WireProtocol;
@@ -46,6 +49,124 @@ pub(crate) fn encode_request(
         headers,
         content: output.body,
     })
+}
+
+/// Lenient policy for decoding a request the plugin will not re-encode
+/// losslessly: unknown provider fields are preserved instead of rejected, so
+/// bodies carrying extensions like `cache_control` still yield an IR the
+/// routing algorithm can read. Only safe when dispatch is same-protocol (the
+/// wire body is passed through raw, not re-encoded from this IR).
+fn lenient_policy() -> TranslationPolicy {
+    TranslationPolicy {
+        unknown_field_policy: UnknownFieldPolicy::Preserve,
+        lossy_conversion_policy: LossyConversionPolicy::AllowWithDiagnostics,
+        ..translation_policy()
+    }
+}
+
+pub(crate) fn decode_request_lenient(
+    engine: &TranslationEngine,
+    protocol: WireProtocol,
+    request: &LlmRequest,
+) -> Result<TranslationRequest> {
+    let output = engine
+        .decode_request(wire_format(protocol), &request.content, &lenient_policy())
+        .map_err(translation_error)?;
+    Ok(output.request)
+}
+
+pub(crate) fn decode_response_lenient(
+    engine: &TranslationEngine,
+    protocol: WireProtocol,
+    body: &Json,
+) -> Result<AggLlmResponse> {
+    let output = engine
+        .decode_response(wire_format(protocol), body, &lenient_policy())
+        .map_err(translation_error)?;
+    Ok(output.response)
+}
+
+pub(crate) fn decode_response(
+    engine: &TranslationEngine,
+    protocol: WireProtocol,
+    body: &Json,
+) -> Result<AggLlmResponse> {
+    let output = engine
+        .decode_response(wire_format(protocol), body, &translation_policy())
+        .map_err(translation_error)?;
+    ensure_no_diagnostics(&output.diagnostics)?;
+    Ok(output.response)
+}
+
+pub(crate) fn encode_response(
+    engine: &TranslationEngine,
+    protocol: WireProtocol,
+    response: &AggLlmResponse,
+) -> Result<Json> {
+    let output = engine
+        .encode_response(wire_format(protocol), response, &translation_policy())
+        .map_err(translation_error)?;
+    ensure_no_diagnostics(&output.diagnostics)?;
+    Ok(output.body)
+}
+
+/// Decodes one provider's wire stream events into neutral response chunks.
+///
+/// Wraps one stream codec plus its per-stream state; feed it every event of
+/// a single provider stream in order.
+pub(crate) struct ChunkDecoder {
+    codec: Arc<dyn StreamCodec>,
+    state: StreamTranslationState,
+}
+
+impl ChunkDecoder {
+    pub(crate) fn new(protocol: WireProtocol) -> Result<Self> {
+        let format = wire_format(protocol);
+        let codec = StreamCodecRegistry::with_builtins()
+            .codec(format)
+            .map_err(translation_error)?;
+        Ok(Self {
+            codec,
+            state: StreamTranslationState::new(format, format),
+        })
+    }
+
+    /// Decodes one wire stream event into zero or more neutral chunks.
+    pub(crate) fn decode(&mut self, event: &Json) -> Vec<LlmResponseChunk> {
+        self.codec.decode_event(&mut self.state, event)
+    }
+}
+
+/// Encodes neutral response chunks back into one provider's wire stream events.
+///
+/// Wraps one stream codec plus its per-stream state; feed it every chunk of a
+/// single response stream in order, then call [`finish`](Self::finish).
+pub(crate) struct ChunkEncoder {
+    codec: Arc<dyn StreamCodec>,
+    state: StreamTranslationState,
+}
+
+impl ChunkEncoder {
+    pub(crate) fn new(protocol: WireProtocol) -> Result<Self> {
+        let format = wire_format(protocol);
+        let codec = StreamCodecRegistry::with_builtins()
+            .codec(format)
+            .map_err(translation_error)?;
+        Ok(Self {
+            codec,
+            state: StreamTranslationState::new(format, format),
+        })
+    }
+
+    /// Encodes one neutral chunk into zero or more wire stream events.
+    pub(crate) fn encode(&mut self, chunk: LlmResponseChunk) -> Vec<Json> {
+        self.codec.encode_event(&mut self.state, chunk)
+    }
+
+    /// Emits any terminal wire events needed after the chunk stream ends.
+    pub(crate) fn finish(&mut self) -> Vec<Json> {
+        self.codec.finish(&mut self.state)
+    }
 }
 
 pub(crate) fn validate_portable_request(

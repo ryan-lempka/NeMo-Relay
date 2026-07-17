@@ -7,6 +7,7 @@
 
 pub mod component;
 pub mod contract;
+pub mod libsy_backend;
 mod stream_translation;
 mod translation;
 
@@ -15,3 +16,4 @@ pub use component::{
     TargetBinding, WireProtocol, deregister_switchyard_component, register_switchyard_component,
     validate_switchyard_atof_configuration,
 };
+pub use libsy_backend::{DecisionBackend, LibsyAlgorithmKind, LibsyBackendConfig};

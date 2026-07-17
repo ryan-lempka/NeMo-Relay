@@ -22,6 +22,8 @@ nemo-relay.workspace = true
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 switchyard-translation.workspace = true
+libsy.workspace = true
+libsy-examples.workspace = true
 schemars = { version = "0.8", optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots"] }
 tokio = { version = "1", default-features = false, features = ["time"] }

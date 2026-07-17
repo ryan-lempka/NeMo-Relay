@@ -36,10 +36,14 @@ use crate::contract::{
     ROUTING_REQUEST_SCHEMA_VERSION, RequestIdentity, RequestMaterialization, RequestProtocol,
     RequestSummary, RoutingDecision, RoutingRequest, RoutingTarget,
 };
+use crate::libsy_backend::{
+    DecisionBackend, LibsyAlgorithmKind, LibsyBackendConfig, build_algorithm, validate_libsy_config,
+};
 use crate::stream_translation::StreamTranscoder;
 use crate::translation::{
-    decode_request, encode_request, latest_user_prompt, recent_message_window, translate_response,
-    translation_engine, validate_portable_request,
+    ChunkDecoder, ChunkEncoder, decode_request, decode_request_lenient, decode_response,
+    decode_response_lenient, encode_request, encode_response, latest_user_prompt,
+    recent_message_window, translate_response, translation_engine, validate_portable_request,
 };
 
 /// Plugin kind used in Relay plugin configuration.
@@ -192,9 +196,18 @@ pub struct SwitchyardConfig {
     /// Execution-intercept priority.
     #[serde(default)]
     pub priority: i32,
-    /// Switchyard Decision API URL.
+    /// Decision backend: HTTP Decision API or in-process libsy.
+    #[serde(default)]
+    pub decision_backend: DecisionBackend,
+    /// In-process libsy backend configuration; required when
+    /// `decision_backend` is `libsy`.
+    #[serde(default)]
+    pub libsy: Option<LibsyBackendConfig>,
+    /// Switchyard Decision API URL (http backend only).
+    #[serde(default = "default_decision_api_url")]
     pub decision_api_url: String,
-    /// Switchyard profile ID.
+    /// Switchyard profile ID (http backend only).
+    #[serde(default)]
     pub decision_profile_id: String,
     /// Current-request materialization.
     pub request_materialization: RequestMaterialization,
@@ -233,7 +246,9 @@ impl Default for SwitchyardConfig {
             version: default_version(),
             mode: RoutingMode::default(),
             priority: 0,
-            decision_api_url: "http://127.0.0.1:8080/v1/routing/decision".into(),
+            decision_backend: DecisionBackend::default(),
+            libsy: None,
+            decision_api_url: default_decision_api_url(),
             decision_profile_id: String::new(),
             request_materialization: RequestMaterialization::SummaryOnly,
             context_mode: ContextMode::PayloadOnly,
@@ -258,6 +273,8 @@ nemo_relay::editor_config! {
     impl SwitchyardConfig {
         mode => { label: "Rollout mode", kind: Enum, values: ["enforce", "observe_only"] },
         priority => { label: "Intercept priority", kind: Integer },
+        decision_backend => { label: "Decision backend", kind: Enum, values: ["http", "libsy"] },
+        libsy => { label: "libsy backend config", kind: Json, optional: true },
         decision_api_url => { label: "Decision API URL", kind: String },
         decision_profile_id => { label: "Decision profile ID", kind: String },
         request_materialization => {
@@ -295,6 +312,9 @@ impl From<SwitchyardConfig> for PluginComponentSpec {
 
 fn default_version() -> u32 {
     1
+}
+fn default_decision_api_url() -> String {
+    "http://127.0.0.1:8080/v1/routing/decision".into()
 }
 fn default_decision_timeout_millis() -> u64 {
     25
@@ -349,10 +369,13 @@ impl Plugin for SwitchyardPlugin {
                     .and_then(SwitchyardRuntime::new)
                     .map_err(PluginError::InvalidConfig)?,
             );
-            runtime
-                .require_healthy_sidecar()
-                .await
-                .map_err(PluginError::RegistrationFailed)?;
+            // The in-process libsy backend has no sidecar to health-check.
+            if runtime.config.decision_backend == DecisionBackend::Http {
+                runtime
+                    .require_healthy_sidecar()
+                    .await
+                    .map_err(PluginError::RegistrationFailed)?;
+            }
             let buffered = Arc::clone(&runtime);
             let buffered_intercept: LlmExecutionFn = Arc::new(move |name, request, next| {
                 let runtime = Arc::clone(&buffered);
@@ -488,6 +511,7 @@ struct SwitchyardRuntime {
     client: reqwest::Client,
     target_headers: BTreeMap<String, Map<String, Json>>,
     translation: switchyard_translation::TranslationEngine,
+    libsy_algorithm: Option<Arc<dyn libsy::Algorithm>>,
 }
 
 enum BufferedAttempt {
@@ -534,11 +558,32 @@ impl SwitchyardRuntime {
                 Ok((id.clone(), headers))
             })
             .collect::<Result<_, String>>()?;
+        let libsy_algorithm = match (config.decision_backend, config.libsy.as_ref()) {
+            (DecisionBackend::Libsy, Some(libsy)) => Some(build_algorithm(libsy, &config.targets)),
+            _ => None,
+        };
         Ok(Self {
             config,
             client,
             target_headers,
             translation: translation_engine(),
+            libsy_algorithm,
+        })
+    }
+
+    // True when every target the libsy algorithm can route to speaks the
+    // inbound protocol, so dispatch is same-protocol pass-through.
+    fn libsy_same_protocol(&self, inbound: WireProtocol) -> bool {
+        self.config.libsy.as_ref().is_some_and(|libsy| {
+            libsy
+                .routable_target_ids(&self.config.targets)
+                .iter()
+                .all(|id| {
+                    self.config
+                        .targets
+                        .get(*id)
+                        .is_some_and(|binding| binding.protocol == inbound)
+                })
         })
     }
 
@@ -583,6 +628,12 @@ impl SwitchyardRuntime {
         };
         if !self.config.enabled_inbound_profiles.contains(&inbound) {
             return next(original).await;
+        }
+        if let Some(algorithm) = self.libsy_algorithm.as_ref() {
+            let algorithm = Arc::clone(algorithm);
+            return self
+                .execute_buffered_libsy(inbound, original, next, algorithm)
+                .await;
         }
         if self.may_translate_protocol(inbound)
             && let Err(error) = validate_portable_request(&self.translation, inbound, &original)
@@ -700,6 +751,12 @@ impl SwitchyardRuntime {
         };
         if !self.config.enabled_inbound_profiles.contains(&inbound) {
             return next(original).await;
+        }
+        if let Some(algorithm) = self.libsy_algorithm.as_ref() {
+            let algorithm = Arc::clone(algorithm);
+            return self
+                .execute_stream_libsy(inbound, original, next, algorithm)
+                .await;
         }
         if self.may_translate_protocol(inbound)
             && let Err(error) = validate_portable_request(&self.translation, inbound, &original)
@@ -936,12 +993,598 @@ impl SwitchyardRuntime {
         Ok((request, decision, routed))
     }
 
+    /// Route one buffered request with the in-process libsy backend.
+    ///
+    /// Drives the algorithm's step stream and fulfills every offloaded
+    /// `CallLlm` promise through Relay's own dispatch chain (`next`), so the
+    /// classifier call and the routed call are both Relay-managed provider
+    /// calls. The final `ReturnToAgent` response is encoded back to the
+    /// inbound protocol.
+    async fn execute_buffered_libsy(
+        &self,
+        inbound: WireProtocol,
+        original: LlmRequest,
+        next: nemo_relay::api::runtime::LlmExecutionNextFn,
+        algorithm: Arc<dyn libsy::Algorithm>,
+    ) -> FlowResult<Json> {
+        // When every routable target speaks the inbound protocol, dispatch is
+        // pass-through: no cross-protocol translation happens, so provider
+        // extensions (e.g. `cache_control`) are safe and the portability gate
+        // is skipped. Cross-protocol target sets keep the strict gate.
+        let same_protocol = self.libsy_same_protocol(inbound);
+        if !same_protocol
+            && let Err(error) = validate_portable_request(&self.translation, inbound, &original)
+        {
+            self.emit_error(
+                None,
+                0,
+                "unsupported_provider_extension",
+                &error.to_string(),
+            );
+            return self
+                .dispatch_fallback_buffered(
+                    inbound,
+                    original,
+                    next,
+                    "unsupported_provider_extension",
+                )
+                .await;
+        }
+        let annotated = if same_protocol {
+            decode_request_lenient(&self.translation, inbound, &original)
+        } else {
+            decode_request(&self.translation, inbound, &original)
+        };
+        let annotated = match annotated {
+            Ok(annotated) => annotated,
+            Err(error) => {
+                self.emit_error(None, 1, "libsy_decision", &error.to_string());
+                return self
+                    .dispatch_fallback_buffered(inbound, original, next, "decision_error")
+                    .await;
+            }
+        };
+        let routing_request =
+            match self.routing_request_with(inbound, &original, 1, None, &annotated) {
+                Ok(request) => request,
+                Err(error) => {
+                    self.emit_error(None, 1, "libsy_decision", &error);
+                    return self
+                        .dispatch_fallback_buffered(inbound, original, next, "decision_error")
+                        .await;
+                }
+            };
+        self.emit_requested(&routing_request);
+        let request = self.libsy_request(annotated, &original, &routing_request);
+        let started = Instant::now();
+        let mut steps = Arc::clone(&algorithm).run_stream(libsy::Context::default(), request);
+        let mut last_decision: Option<RoutingDecision> = None;
+        let mut last_raw_response: Option<Json> = None;
+        while let Some(step) = steps.next().await {
+            let step = match step {
+                Ok(step) => step,
+                Err(error) => {
+                    self.emit_error(
+                        Some(&routing_request),
+                        1,
+                        "libsy_algorithm",
+                        &error.to_string(),
+                    );
+                    return self
+                        .dispatch_fallback_buffered(inbound, original, next, "decision_error")
+                        .await;
+                }
+            };
+            match step {
+                libsy::Step::Decision(decision) => {
+                    if let Some(routed) =
+                        self.emit_libsy_decision(&routing_request, decision.as_ref(), started)
+                    {
+                        last_decision = Some(routed);
+                    }
+                }
+                libsy::Step::CallLlm(call) => {
+                    let backend_id = call.get_decision().selected_model().to_string();
+                    let call_request = call.get_request().llm_request.clone();
+                    let served = self
+                        .serve_libsy_call(
+                            inbound,
+                            same_protocol,
+                            &original,
+                            backend_id,
+                            call_request,
+                            &next,
+                        )
+                        .await;
+                    if let Err(error) = &served {
+                        self.emit_error(Some(&routing_request), 1, "libsy_call", error);
+                    }
+                    let served = served.map(|(response, raw)| {
+                        last_raw_response = raw;
+                        response
+                    });
+                    if let Err(error) = call.respond(served.map_err(Into::into)) {
+                        self.emit_error(
+                            Some(&routing_request),
+                            1,
+                            "libsy_call",
+                            &format!("promise fulfillment failed: {error}"),
+                        );
+                    }
+                }
+                libsy::Step::ReturnToAgent(response) => {
+                    let agg = match response.llm_response.into_agg().await {
+                        Ok(agg) => agg,
+                        Err(error) => {
+                            self.emit_error(
+                                Some(&routing_request),
+                                1,
+                                "libsy_algorithm",
+                                &error.to_string(),
+                            );
+                            return self
+                                .dispatch_fallback_buffered(
+                                    inbound,
+                                    original,
+                                    next,
+                                    "decision_error",
+                                )
+                                .await;
+                        }
+                    };
+                    let body = match encode_response(&self.translation, inbound, &agg) {
+                        Ok(body) => body,
+                        // Same-protocol dispatch: the routed call's raw body is
+                        // already in the inbound protocol; return it when the IR
+                        // cannot re-encode losslessly.
+                        Err(_) if same_protocol && last_raw_response.is_some() => {
+                            last_raw_response.take().unwrap_or_default()
+                        }
+                        Err(error) => {
+                            self.emit_error(
+                                Some(&routing_request),
+                                1,
+                                "response_translation",
+                                &error.to_string(),
+                            );
+                            return self
+                                .dispatch_fallback_buffered(
+                                    inbound,
+                                    original,
+                                    next,
+                                    "translation_error",
+                                )
+                                .await;
+                        }
+                    };
+                    if let Some(decision) = last_decision.as_ref() {
+                        self.record_routing_contribution(decision, 1, true);
+                    }
+                    return Ok(body);
+                }
+            }
+        }
+        self.emit_error(
+            Some(&routing_request),
+            1,
+            "libsy_algorithm",
+            "algorithm stream ended without a final response",
+        );
+        self.dispatch_fallback_buffered(inbound, original, next, "decision_error")
+            .await
+    }
+
+    /// Route one streamed request with the in-process libsy backend.
+    ///
+    /// Same-protocol target sets only; cross-protocol streamed routing
+    /// dispatches the trusted fallback. The classifier's offloaded call is
+    /// served buffered by collecting its provider stream (the classifier
+    /// reads scores from an aggregate response); the routed call's provider
+    /// stream is bridged live through neutral chunks so the caller sees
+    /// incremental output.
+    async fn execute_stream_libsy(
+        &self,
+        inbound: WireProtocol,
+        original: LlmRequest,
+        next: nemo_relay::api::runtime::LlmStreamExecutionNextFn,
+        algorithm: Arc<dyn libsy::Algorithm>,
+    ) -> FlowResult<LlmJsonStream> {
+        if !self.libsy_same_protocol(inbound) {
+            self.emit_error(
+                None,
+                1,
+                "libsy_stream",
+                "streamed requests require same-protocol libsy targets",
+            );
+            return self
+                .dispatch_fallback_stream(inbound, original, next, "libsy_streaming_cross_protocol")
+                .await;
+        }
+        let annotated = match decode_request_lenient(&self.translation, inbound, &original) {
+            Ok(annotated) => annotated,
+            Err(error) => {
+                self.emit_error(None, 1, "libsy_decision", &error.to_string());
+                return self
+                    .dispatch_fallback_stream(inbound, original, next, "decision_error")
+                    .await;
+            }
+        };
+        let routing_request =
+            match self.routing_request_with(inbound, &original, 1, None, &annotated) {
+                Ok(request) => request,
+                Err(error) => {
+                    self.emit_error(None, 1, "libsy_decision", &error);
+                    return self
+                        .dispatch_fallback_stream(inbound, original, next, "decision_error")
+                        .await;
+                }
+            };
+        self.emit_requested(&routing_request);
+        let request = self.libsy_request(annotated, &original, &routing_request);
+        let started = Instant::now();
+        let mut steps = Arc::clone(&algorithm).run_stream(libsy::Context::default(), request);
+        let mut last_decision: Option<RoutingDecision> = None;
+        while let Some(step) = steps.next().await {
+            let step = match step {
+                Ok(step) => step,
+                Err(error) => {
+                    self.emit_error(
+                        Some(&routing_request),
+                        1,
+                        "libsy_algorithm",
+                        &error.to_string(),
+                    );
+                    return self
+                        .dispatch_fallback_stream(inbound, original, next, "decision_error")
+                        .await;
+                }
+            };
+            match step {
+                libsy::Step::Decision(decision) => {
+                    if let Some(routed) =
+                        self.emit_libsy_decision(&routing_request, decision.as_ref(), started)
+                    {
+                        last_decision = Some(routed);
+                    }
+                }
+                libsy::Step::CallLlm(call) => {
+                    let backend_id = call.get_decision().selected_model().to_string();
+                    let served = if self.libsy_classifier_target() == Some(backend_id.as_str()) {
+                        self.serve_libsy_stream_call_collected(
+                            inbound,
+                            &original,
+                            &backend_id,
+                            call.get_request().llm_request.clone(),
+                            &next,
+                        )
+                        .await
+                    } else {
+                        self.serve_libsy_stream_call_live(&original, &backend_id, &next)
+                            .await
+                    };
+                    if let Err(error) = &served {
+                        self.emit_error(Some(&routing_request), 1, "libsy_call", error);
+                    }
+                    if let Err(error) = call.respond(served.map_err(Into::into)) {
+                        self.emit_error(
+                            Some(&routing_request),
+                            1,
+                            "libsy_call",
+                            &format!("promise fulfillment failed: {error}"),
+                        );
+                    }
+                }
+                libsy::Step::ReturnToAgent(response) => {
+                    if let Some(decision) = last_decision.as_ref() {
+                        self.record_routing_contribution(decision, 1, true);
+                    }
+                    let metadata = identity_metadata(&routing_request);
+                    match response.llm_response {
+                        libsy::LlmResponse::Stream(chunks) => {
+                            return Ok(mark_terminal_stream(
+                                encoded_chunk_stream(inbound, chunks)?,
+                                "provider_stream_committed",
+                                self.config.mode.label(),
+                                metadata,
+                            ));
+                        }
+                        // The algorithm answered with a buffered response;
+                        // return it to the caller as a single-item stream.
+                        libsy::LlmResponse::Agg(agg) => {
+                            let body = match encode_response(&self.translation, inbound, &agg) {
+                                Ok(body) => body,
+                                Err(error) => {
+                                    self.emit_error(
+                                        Some(&routing_request),
+                                        1,
+                                        "response_translation",
+                                        &error.to_string(),
+                                    );
+                                    return self
+                                        .dispatch_fallback_stream(
+                                            inbound,
+                                            original,
+                                            next,
+                                            "translation_error",
+                                        )
+                                        .await;
+                                }
+                            };
+                            return Ok(mark_terminal_stream(
+                                Box::pin(futures_stream::once(async move { Ok(body) })),
+                                "provider_stream_committed",
+                                self.config.mode.label(),
+                                metadata,
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        self.emit_error(
+            Some(&routing_request),
+            1,
+            "libsy_algorithm",
+            "algorithm stream ended without a final response",
+        );
+        self.dispatch_fallback_stream(inbound, original, next, "decision_error")
+            .await
+    }
+
+    // Build the libsy request envelope for one inbound Relay request.
+    fn libsy_request(
+        &self,
+        annotated: switchyard_translation::LlmRequest,
+        original: &LlmRequest,
+        routing_request: &RoutingRequest,
+    ) -> libsy::Request {
+        libsy::Request {
+            llm_request: annotated,
+            raw_request: Some(original.content.clone()),
+            metadata: Some(libsy::Metadata {
+                session_id: Some(routing_request.identity.session_id.clone()),
+                agent_id: None,
+                task_id: None,
+                correlation_id: Some(routing_request.identity.request_id.clone()),
+                extra_metadata: None,
+                http_headers: None,
+                wire_format: None,
+            }),
+        }
+    }
+
+    // The configured classifier target, when the algorithm has one.
+    fn libsy_classifier_target(&self) -> Option<&str> {
+        self.config
+            .libsy
+            .as_ref()
+            .filter(|libsy| libsy.algorithm == LibsyAlgorithmKind::LlmClassifier)
+            .map(|libsy| libsy.classifier_target.as_str())
+    }
+
+    // Translate a libsy decision into the plugin's routing-decision shape and
+    // emit it; returns it so the caller can track the applied decision.
+    fn emit_libsy_decision(
+        &self,
+        routing_request: &RoutingRequest,
+        decision: &dyn libsy::Decision,
+        started: Instant,
+    ) -> Option<RoutingDecision> {
+        let binding = self.config.targets.get(decision.selected_model())?;
+        let routed = self.libsy_routing_decision(decision.selected_model(), binding, decision);
+        self.emit_decision(
+            routing_request,
+            &routed,
+            1,
+            false,
+            started.elapsed().as_millis() as u64,
+        );
+        Some(routed)
+    }
+
+    /// Fulfill one offloaded libsy call through Relay's dispatch chain.
+    ///
+    /// The selected semantic name is resolved through the same `TargetBinding`
+    /// table the HTTP backend uses: the call's IR request is encoded to the
+    /// binding's wire protocol, bound to the Relay-owned backend, dispatched
+    /// via `next`, and the provider response is decoded back to the IR.
+    /// Returns the IR response and, for same-protocol dispatch, the raw
+    /// provider body (kept so the final answer can be returned verbatim when
+    /// the IR is not lossless).
+    async fn serve_libsy_call(
+        &self,
+        inbound: WireProtocol,
+        same_protocol: bool,
+        original: &LlmRequest,
+        backend_id: String,
+        call_request: switchyard_translation::LlmRequest,
+        next: &nemo_relay::api::runtime::LlmExecutionNextFn,
+    ) -> Result<(libsy::Response, Option<Json>), String> {
+        let binding = self
+            .config
+            .targets
+            .get(&backend_id)
+            .ok_or_else(|| format!("libsy selected unknown backend_id {backend_id:?}"))?;
+        let encoded = encode_request(
+            &self.translation,
+            binding.protocol,
+            &call_request,
+            original.headers.clone(),
+        );
+        let mut wire = match encoded {
+            Ok(wire) => wire,
+            // Pass the original body through verbatim when the IR cannot
+            // re-encode it losslessly and no translation is needed anyway.
+            Err(_) if same_protocol && binding.protocol == inbound => LlmRequest {
+                headers: original.headers.clone(),
+                content: original.content.clone(),
+            },
+            Err(error) => return Err(format!("libsy call encode failed: {error}")),
+        };
+        self.bind_target(&mut wire, &backend_id, binding)?;
+        let response = next(wire).await.map_err(|error| {
+            format!(
+                "libsy call dispatch failed: {}",
+                provider_error_summary(&error)
+            )
+        })?;
+        let agg = match decode_response(&self.translation, binding.protocol, &response) {
+            Ok(agg) => agg,
+            Err(error) if same_protocol => {
+                decode_response_lenient(&self.translation, binding.protocol, &response)
+                    .map_err(|_| format!("libsy call decode failed: {error}"))?
+            }
+            Err(error) => return Err(format!("libsy call decode failed: {error}")),
+        };
+        let raw = same_protocol.then(|| response.clone());
+        Ok((
+            libsy::Response {
+                llm_response: libsy::LlmResponse::Agg(agg),
+                metadata: None,
+            },
+            raw,
+        ))
+    }
+
+    /// Serve the classifier's offloaded call through the stream dispatch
+    /// chain, collecting the provider stream into a buffered response.
+    ///
+    /// The classifier algorithm reads its score with `as_agg()` and would
+    /// silently ignore a stream, so its call is folded to an aggregate before
+    /// responding.
+    async fn serve_libsy_stream_call_collected(
+        &self,
+        inbound: WireProtocol,
+        original: &LlmRequest,
+        backend_id: &str,
+        mut call_request: switchyard_translation::LlmRequest,
+        next: &nemo_relay::api::runtime::LlmStreamExecutionNextFn,
+    ) -> Result<libsy::Response, String> {
+        let binding = self
+            .config
+            .targets
+            .get(backend_id)
+            .ok_or_else(|| format!("libsy selected unknown backend_id {backend_id:?}"))?;
+        // The dispatch chain is streaming, so the provider must stream this call.
+        call_request.stream = true;
+        let encoded = encode_request(
+            &self.translation,
+            binding.protocol,
+            &call_request,
+            original.headers.clone(),
+        );
+        let mut wire = match encoded {
+            Ok(wire) => wire,
+            // Same-protocol pass-through of the original (already streaming)
+            // body when the IR cannot re-encode losslessly.
+            Err(_) if binding.protocol == inbound => LlmRequest {
+                headers: original.headers.clone(),
+                content: original.content.clone(),
+            },
+            Err(error) => return Err(format!("libsy call encode failed: {error}")),
+        };
+        self.bind_target(&mut wire, backend_id, binding)?;
+        let upstream = next(wire).await.map_err(|error| {
+            format!(
+                "libsy call dispatch failed: {}",
+                provider_error_summary(&error)
+            )
+        })?;
+        let chunks = decoded_chunk_stream(binding.protocol, upstream)
+            .map_err(|error| format!("libsy call decode failed: {error}"))?;
+        let agg = libsy::LlmResponse::Stream(chunks)
+            .into_agg()
+            .await
+            .map_err(|error| format!("libsy call decode failed: {error}"))?;
+        Ok(libsy::Response {
+            llm_response: libsy::LlmResponse::Agg(agg),
+            metadata: None,
+        })
+    }
+
+    /// Serve a routed (non-classifier) offloaded call live: dispatch the
+    /// original streaming body raw to the bound backend and hand libsy the
+    /// provider stream bridged through neutral chunks.
+    async fn serve_libsy_stream_call_live(
+        &self,
+        original: &LlmRequest,
+        backend_id: &str,
+        next: &nemo_relay::api::runtime::LlmStreamExecutionNextFn,
+    ) -> Result<libsy::Response, String> {
+        let binding = self
+            .config
+            .targets
+            .get(backend_id)
+            .ok_or_else(|| format!("libsy selected unknown backend_id {backend_id:?}"))?;
+        // Same-protocol pass-through: the original body (already streaming)
+        // is dispatched raw so provider extensions survive untouched.
+        let mut wire = LlmRequest {
+            headers: original.headers.clone(),
+            content: original.content.clone(),
+        };
+        self.bind_target(&mut wire, backend_id, binding)?;
+        let upstream = next(wire).await.map_err(|error| {
+            format!(
+                "libsy call dispatch failed: {}",
+                provider_error_summary(&error)
+            )
+        })?;
+        let chunks = decoded_chunk_stream(binding.protocol, upstream)
+            .map_err(|error| format!("libsy call decode failed: {error}"))?;
+        Ok(libsy::Response {
+            llm_response: libsy::LlmResponse::Stream(chunks),
+            metadata: None,
+        })
+    }
+
+    fn libsy_routing_decision(
+        &self,
+        backend_id: &str,
+        binding: &TargetBinding,
+        decision: &dyn libsy::Decision,
+    ) -> RoutingDecision {
+        RoutingDecision {
+            schema_version: ROUTING_DECISION_SCHEMA_VERSION.into(),
+            decision_id: format!("libsy-{}", Uuid::now_v7()),
+            router: crate::contract::DecisionProvider {
+                name: "libsy".into(),
+                version: env!("CARGO_PKG_VERSION").into(),
+            },
+            route: RoutingTarget {
+                tier: "libsy".into(),
+                target_model: binding.model.clone(),
+                backend_id: backend_id.into(),
+                target_protocol_profile: binding.protocol.label().into(),
+                target_endpoint: binding.endpoint.clone(),
+            },
+            baseline_route: None,
+            confidence: None,
+            reason_code: Some("libsy_decision".into()),
+            reason_summary: decision.reasoning().map(ToOwned::to_owned),
+            metadata: BTreeMap::new(),
+            extra: BTreeMap::new(),
+        }
+    }
+
     fn routing_request(
         &self,
         inbound: WireProtocol,
         request: &LlmRequest,
         attempt: u32,
         previous: Option<(String, String)>,
+    ) -> Result<RoutingRequest, String> {
+        let annotated = decode_request(&self.translation, inbound, request)
+            .map_err(|error| format!("request translation decode failed: {error}"))?;
+        self.routing_request_with(inbound, request, attempt, previous, &annotated)
+    }
+
+    fn routing_request_with(
+        &self,
+        inbound: WireProtocol,
+        request: &LlmRequest,
+        attempt: u32,
+        previous: Option<(String, String)>,
+        annotated: &switchyard_translation::LlmRequest,
     ) -> Result<RoutingRequest, String> {
         let session = header(request, "x-nemo-relay-session-id");
         let stable_request_id = header(request, "x-nemo-relay-request-id");
@@ -954,9 +1597,7 @@ impl SwitchyardRuntime {
         let synthetic_session = format!("request-{}", Uuid::now_v7());
         let session_id = session.unwrap_or_else(|| synthetic_session.clone());
         let request_id = stable_request_id.unwrap_or_else(|| format!("request-{}", Uuid::now_v7()));
-        let annotated = decode_request(&self.translation, inbound, request)
-            .map_err(|error| format!("request translation decode failed: {error}"))?;
-        let current_request = self.materialize(inbound, request, &annotated)?;
+        let current_request = self.materialize(inbound, request, annotated)?;
         let (previous_route, retry_reason) = previous.unzip();
         Ok(RoutingRequest {
             schema_version: ROUTING_REQUEST_SCHEMA_VERSION.into(),
@@ -1148,12 +1789,22 @@ impl SwitchyardRuntime {
             )
             .map_err(|error| format!("request translation failed: {error}"))?
         };
+        self.bind_target(&mut routed, &decision.route.backend_id, binding)?;
+        Ok(routed)
+    }
+
+    fn bind_target(
+        &self,
+        routed: &mut LlmRequest,
+        backend_id: &str,
+        binding: &TargetBinding,
+    ) -> Result<(), String> {
         let object = routed
             .content
             .as_object_mut()
             .ok_or_else(|| "translated request body is not an object".to_string())?;
         object.insert("model".into(), Json::String(binding.model.clone()));
-        if let Some(headers) = self.target_headers.get(&decision.route.backend_id) {
+        if let Some(headers) = self.target_headers.get(backend_id) {
             routed.headers.extend(headers.clone());
         }
         routed.headers.insert(
@@ -1168,7 +1819,7 @@ impl SwitchyardRuntime {
             INTERNAL_RETRY_AWARE_HEADER.into(),
             Json::String("true".into()),
         );
-        Ok(routed)
+        Ok(())
     }
 
     fn fallback_request(
@@ -1397,9 +2048,31 @@ fn validate_atof_endpoint_name(name: Option<&str>) -> Result<Option<&str>, Strin
 
 fn validate_config(config: &SwitchyardConfig) -> Result<(), String> {
     validate_scalar_config(config)?;
-    validate_decision_api_url(&config.decision_api_url)?;
+    validate_decision_backend(config)?;
     validate_target_bindings(config)?;
     validate_default_targets(config)
+}
+
+fn validate_decision_backend(config: &SwitchyardConfig) -> Result<(), String> {
+    match config.decision_backend {
+        DecisionBackend::Http => {
+            if config.decision_profile_id.trim().is_empty() {
+                return Err("decision_profile_id must be non-empty".into());
+            }
+            validate_decision_api_url(&config.decision_api_url)
+        }
+        DecisionBackend::Libsy => {
+            let libsy = config
+                .libsy
+                .as_ref()
+                .ok_or("libsy backend requires a libsy config block")?;
+            validate_libsy_config(libsy, &config.targets)?;
+            if config.mode == RoutingMode::ObserveOnly {
+                return Err("observe_only is not yet supported with the libsy backend".into());
+            }
+            Ok(())
+        }
+    }
 }
 
 fn validate_scalar_config(config: &SwitchyardConfig) -> Result<(), String> {
@@ -1408,9 +2081,6 @@ fn validate_scalar_config(config: &SwitchyardConfig) -> Result<(), String> {
             "unsupported Switchyard config version {}",
             config.version
         ));
-    }
-    if config.decision_profile_id.trim().is_empty() {
-        return Err("decision_profile_id must be non-empty".into());
     }
     if config.decision_timeout_millis == 0 {
         return Err("decision_timeout_millis must be greater than zero".into());
@@ -1679,6 +2349,64 @@ fn mark_terminal_stream(
             }
         }
     })
+}
+
+// Bridge a provider JSON event stream into a neutral libsy chunk stream.
+fn decoded_chunk_stream(
+    protocol: WireProtocol,
+    mut upstream: LlmJsonStream,
+) -> FlowResult<libsy::LlmResponseStream> {
+    let mut decoder = ChunkDecoder::new(protocol)?;
+    Ok(Box::pin(stream! {
+        while let Some(item) = upstream.next().await {
+            match item {
+                Ok(event) => {
+                    for chunk in decoder.decode(&event) {
+                        yield Ok(chunk);
+                    }
+                }
+                Err(error) => {
+                    yield Err(Box::new(error) as Box<dyn std::error::Error + Send + Sync>);
+                    return;
+                }
+            }
+        }
+    }))
+}
+
+// Bridge a neutral libsy chunk stream back into inbound-protocol wire events.
+fn encoded_chunk_stream(
+    inbound: WireProtocol,
+    mut chunks: libsy::LlmResponseStream,
+) -> FlowResult<LlmJsonStream> {
+    let mut encoder = ChunkEncoder::new(inbound)?;
+    Ok(Box::pin(stream! {
+        while let Some(item) = chunks.next().await {
+            match item {
+                Ok(chunk) => {
+                    for event in encoder.encode(chunk) {
+                        yield Ok(event);
+                    }
+                }
+                Err(error) => {
+                    yield Err(flow_error_from_boxed(error));
+                    return;
+                }
+            }
+        }
+        for event in encoder.finish() {
+            yield Ok(event);
+        }
+    }))
+}
+
+// Recover the original FlowError carried through a libsy stream item, falling
+// back to an internal error for foreign error types.
+fn flow_error_from_boxed(error: Box<dyn std::error::Error + Send + Sync>) -> FlowError {
+    match error.downcast::<FlowError>() {
+        Ok(error) => *error,
+        Err(error) => FlowError::Internal(error.to_string()),
+    }
 }
 
 fn translated_stream(

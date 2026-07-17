@@ -100,3 +100,28 @@ Trajectory scripts write to `artifacts/` by default. Set `SWITCHYARD_TRAJECTORY_
 shareable output directory. On failure, logs are preserved and include the verified Switchyard
 revision. Do not place API keys or bearer tokens in configuration files; use environment variables
 or an untracked secrets file.
+
+## In-process libsy routing (no Switchyard server)
+
+`run-libsy-e2e.sh` demonstrates the library-mode integration: the plugin makes routing
+decisions in-process with libsy's LLM-classifier algorithm instead of calling the HTTP
+Decision API. No Switchyard process runs. Every model call the algorithm offloads (the
+classifier scoring call and the routed call) surfaces as a `CallLlm` promise that the
+plugin fulfills through Relay's own dispatch chain, so provider credentials, retries,
+and observability stay Relay-owned.
+
+```bash
+./examples/switchyard/run-libsy-e2e.sh
+```
+
+The script starts `libsy-fake-upstream.py` (scores prompts containing "hard" at 0.9,
+everything else at 0.1), starts Relay with `libsy-plugins.toml`, and verifies an easy
+prompt routes to the weak model, a hard prompt routes to the strong model, and a
+streamed hard prompt routes to the strong model with the provider stream bridged back
+as SSE.
+
+Streamed requests are routed when every routable target speaks the inbound protocol:
+the classifier's provider stream is collected in-process for its score, and the routed
+call's provider stream is translated chunk-by-chunk back to the caller. Current limits:
+cross-protocol streamed requests dispatch the trusted per-protocol fallback, and only
+`enforce` mode is supported.
